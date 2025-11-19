@@ -4,65 +4,66 @@ const userCollection = client.db("nexoro").collection("Users");
 
 // Create new user
 export const createUser = async (req, res) => {
-    const { name, email, phone, role, designation, password } = req.body;
-    try {
-        await admin.auth().createUser({ email, password, displayName: name });
-        await userCollection.insertOne({ name, email, phone, role, designation });
-        res.status(200).send({ success: true });
-    } catch (error) {
-        console.error("Create user error:", error);
-        res.status(500).send({ success: false, message: "Failed to create user" });
-    }
+  const { userName, email, google } = req.body;
+  const role = "customer";
+  const joined = new Date();
+  try {
+    await userCollection.insertOne({ userName, email, google, role, joined });
+    res.status(200).send({ success: true });
+  } catch (error) {
+    console.error("Create user error:", error);
+    res.status(500).send({ success: false, message: "Failed to create user" });
+  }
 };
 
 // Get single user
 export const getUser = async (req, res) => {
-    const email = req.params.email;
-    const user = await userCollection.findOne({ email });
-    res.send(user);
+  const email = req.params.email;
+  const user = await userCollection.findOne({ email });
+  res.send(user);
 };
 
 // Get all users
 export const getAllUsers = async (req, res) => {
-    const users = await userCollection.find().toArray();
-    res.send(users);
+  const users = await userCollection.find().toArray();
+  res.send(users);
 };
 
 // Update user
 export const updateUser = async (req, res) => {
-    const email = req.params.email;
-    const updatedData = req.body;
-    try {
-        const result = await userCollection.updateOne(
-            { email },
-            { $set: updatedData }
-        );
-        if (result.modifiedCount > 0) {
-            res.status(200).send({ success: true, message: "User updated" });
-        } else {
-            res.status(404).send({ success: false, message: "User not found" });
-        }
-    } catch (error) {
-        console.error("Update error:", error);
-        res.status(500).send({ success: false, message: "Internal server error" });
+  const email = req.params.email;
+  const updatedData = req.body;
+  try {
+    const result = await userCollection.updateOne(
+      { email },
+      { $set: updatedData }
+    );
+    if (result.modifiedCount > 0) {
+      res.status(200).send({ success: true, message: "User updated" });
+    } else {
+      res.status(404).send({ success: false, message: "User not found" });
     }
+  } catch (error) {
+    console.error("Update error:", error);
+    res.status(500).send({ success: false, message: "Internal server error" });
+  }
 };
 
 // Delete user
 export const deleteUser = async (req, res) => {
-    const email = req.params.email;
-    try {
-        const userRecord = await admin.auth().getUserByEmail(email);
-        await admin.auth().deleteUser(userRecord.uid);
+  const email = req.params.email;
+  try {
+    const userRecord = await admin.auth().getUserByEmail(email);
+    await admin.auth().deleteUser(userRecord.uid);
 
-        const result = await userCollection.deleteOne({ email });
-        if (result.deletedCount > 0) {
-            res.send({ success: true, message: "User deleted successfully" });
-        } else {
-            res.send({ success: false, message: "User not found in MongoDB" });
-        }
-    } catch (error) {
-        console.error("Delete error:", error);
-        res.status(500).send({ success: false, message: "Failed to delete user" });
+    const result = await userCollection.deleteOne({ email });
+    if (result.deletedCount > 0) {
+      res.send({ success: true, message: "User deleted successfully" });
+    } else {
+      res.send({ success: false, message: "User not found in MongoDB" });
     }
+  } catch (error) {
+    console.error("Delete error:", error);
+    res.status(500).send({ success: false, message: "Failed to delete user" });
+  }
 };

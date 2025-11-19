@@ -8,12 +8,10 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 app.use(
-    cors({
-        origin: [
-            "http://localhost:3000",
-        ],
-        credentials: true,
-    })
+  cors({
+    origin: ["http://localhost:3000", "https://nexoro-tau.vercel.app"],
+    credentials: true,
+  })
 );
 app.use(express.json());
 
