@@ -1,6 +1,8 @@
 import client from "../config/db.js";
+import admin from "../admin/firebase.config.js";
 
 const userCollection = client.db("nexoro").collection("Users");
+await userCollection.createIndex({ email: 1 }, { unique: true });
 
 // Create new user
 export const createUser = async (req, res) => {
@@ -11,6 +13,11 @@ export const createUser = async (req, res) => {
     await userCollection.insertOne({ userName, email, google, role, joined });
     res.status(200).send({ success: true });
   } catch (error) {
+    if (error.code === 11000) {
+      return res
+        .status(400)
+        .send({ success: false, message: "User already exists" });
+    }
     console.error("Create user error:", error);
     res.status(500).send({ success: false, message: "Failed to create user" });
   }
@@ -25,7 +32,7 @@ export const getUser = async (req, res) => {
 
 // Get all users
 export const getAllUsers = async (req, res) => {
-  const users = await userCollection.find().toArray();
+  const users = await userCollection.find({ role: "customer" }).toArray();
   res.send(users);
 };
 
@@ -55,7 +62,6 @@ export const deleteUser = async (req, res) => {
   try {
     const userRecord = await admin.auth().getUserByEmail(email);
     await admin.auth().deleteUser(userRecord.uid);
-
     const result = await userCollection.deleteOne({ email });
     if (result.deletedCount > 0) {
       res.send({ success: true, message: "User deleted successfully" });
