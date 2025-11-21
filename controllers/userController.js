@@ -64,12 +64,14 @@ export const deleteUser = async (req, res) => {
     await admin.auth().deleteUser(userRecord.uid);
     const result = await userCollection.deleteOne({ email });
     if (result.deletedCount > 0) {
-      res.send({ success: true, message: "User deleted successfully" });
+      return res.send({ success: true, message: "User deleted successfully" });
     } else {
-      res.send({ success: false, message: "User not found in MongoDB" });
+      return res.send({ success: false, message: "User not found in MongoDB" });
     }
   } catch (error) {
     console.error("Delete error:", error);
-    res.status(500).send({ success: false, message: "Failed to delete user" });
+    return res
+      .status(500)
+      .send({ success: false, message: "Failed to delete user" });
   }
 };
