@@ -26,8 +26,13 @@ export const createUser = async (req, res) => {
 // Get single user
 export const getUser = async (req, res) => {
   const email = req.params.email;
-  const user = await userCollection.findOne({ email });
-  res.send(user);
+  try {
+    const user = await userCollection.findOne({ email });
+    res.status(200).send(user);
+  }
+  catch (error) {
+    return res.status(404).send({ success: false, message: "User not found" })
+  }
 };
 
 // Get all users
