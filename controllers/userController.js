@@ -28,10 +28,14 @@ export const getUser = async (req, res) => {
   const email = req.params.email;
   try {
     const user = await userCollection.findOne({ email });
-    res.status(200).send(user);
-  }
-  catch (error) {
-    return res.status(404).send({ success: false, message: "User not found" })
+    if (user) {
+      return res.status(200).json({ success: true, user });
+    } else {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+  } catch (error) {
+    console.error("Get user error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
 
