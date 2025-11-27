@@ -1,5 +1,5 @@
 import express from "express";
-import { createMessage, getAllMessages, getMessage } from "../controllers/msgController.js";
+import { createMessage, getAllMessages, getMessage, msgRead } from "../controllers/msgController.js";
 
 const router = express.Router();
 
@@ -7,5 +7,6 @@ const router = express.Router();
 router.post("/", createMessage);
 router.get("/", getAllMessages);
 router.get("/:message", getMessage);
+router.patch("/:message", msgRead);
 
 export default router;

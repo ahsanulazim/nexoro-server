@@ -45,3 +45,18 @@ export const getMessage = async (req, res) => {
         return res.status(500).json({ success: false, message: "Internal server error" });
     }
 };
+
+//Mask As Read Massage
+export const msgRead = async (req, res) => {
+    const { message } = req.params;
+    try {
+        await msgCollection.updateOne(
+            { _id: new ObjectId(message) },
+            { $set: { read: true } }
+        );
+        res.send({ success: true });
+    } catch (error) {
+        console.error("Mark as read error:", error);
+        res.status(500).send({ success: false });
+    }
+};
