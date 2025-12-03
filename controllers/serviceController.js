@@ -23,3 +23,9 @@ export const createService = async (req, res) => {
             .send({ success: false, message: "Failed to create service" });
     }
 };
+
+// Get all Services
+export const getAllServices = async (req, res) => {
+    const services = await serviceCollection.find().toArray();
+    res.send(services);
+};
