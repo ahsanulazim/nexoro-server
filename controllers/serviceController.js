@@ -1,4 +1,7 @@
+import { ObjectId } from "mongodb";
 import client from "../config/db.js";
+import { deleteFromCloudinary } from "../middleware/deleteCloudinary.js";
+import cloudinary from "../config/cloudinary.js";
 
 const serviceCollection = client.db("nexoro").collection("Services");
 await serviceCollection.createIndex({ slug: 1 }, { unique: true });
@@ -60,5 +63,43 @@ export const deleteServices = async (req, res) => {
     return res
       .status(500)
       .send({ success: false, message: "Failed to delete Service" });
+  }
+};
+
+// update service
+export const updateService = async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { title, slug, shortDes, longDes } = req.body;
+    const existingService = await serviceCollection.findOne({ _id: new ObjectId(id) });
+
+    if (!existingService) {
+      return res.status(404).json({ message: "Service not found" });
+    }
+    const updatedService = {
+      title,
+      slug,
+      shortDes,
+      longDes,
+      added: new Date(),
+    };
+
+    if (req.file) {
+      if (existingService.icon?.public_id) {
+        cloudinary.uploader.destroy(existingService.icon.public_id);
+      }
+      updatedService.icon = {
+        url: req.file.path,
+        public_id: req.file.filename,
+      };
+    } else {
+      updatedService.icon = existingService.icon;
+    }
+
+    await serviceCollection.updateOne({ _id: new ObjectId(id) }, { $set: updatedService });
+    res.status(200).json({ success: true, message: "Service updated successfully" });
+  } catch (error) {
+    console.error("Update service error:", error);
+    res.status(500).json({ success: false, message: "Failed to update service" });
   }
 };
