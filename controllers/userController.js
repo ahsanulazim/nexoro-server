@@ -41,8 +41,12 @@ export const getUser = async (req, res) => {
 
 // Get all users
 export const getAllUsers = async (req, res) => {
-  const users = await userCollection.find({ role: "customer" }).toArray();
-  res.send(users);
+  try {
+    const users = await userCollection.find({ role: "customer" }).toArray();
+    res.status(200).json(users);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to fetch users", error });
+  }
 };
 
 // Update user
@@ -67,7 +71,9 @@ export const updateUser = async (req, res) => {
 
 // Delete user
 export const deleteUser = async (req, res) => {
-  const email = req.params.email;
+  const email = req.params.remove;
+  console.log(email);
+
   try {
     const userRecord = await admin.auth().getUserByEmail(email);
     await admin.auth().deleteUser(userRecord.uid);
