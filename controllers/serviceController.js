@@ -87,10 +87,8 @@ export const updateService = async (req, res) => {
       if (existingService.icon?.public_id) {
         cloudinary.uploader.destroy(existingService.icon.public_id);
       }
-      updatedService.icon = {
-        url: req.file.path,
-        public_id: req.file.filename,
-      };
+      updatedService.icon = req.file.path;
+      updatedService.public_id = req.file.filename;
     } else {
       updatedService.icon = existingService.icon;
     }
