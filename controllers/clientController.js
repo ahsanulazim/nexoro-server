@@ -6,7 +6,7 @@ await clientCollection.createIndex({ email: 1 }, { unique: true });
 //create new client
 export const createClient = async (req, res) => {
   const { client, company, role, email, country } = req.body;
-  const logo = req.file ? req.file.path : null;
+  const { filename, path } = req.file;
   const joined = new Date();
   try {
     await clientCollection.insertOne({
@@ -15,7 +15,8 @@ export const createClient = async (req, res) => {
       role,
       email,
       country,
-      logo,
+      logo: path,
+      public_id: filename,
       joined,
     });
     res.status(200).send({ success: true });
@@ -36,4 +37,28 @@ export const createClient = async (req, res) => {
 export const getAllClients = async (req, res) => {
   const clients = await clientCollection.find().toArray();
   res.send(clients);
+};
+
+// delete client
+export const deleteClient = async (req, res) => {
+  const email = req.params.email;
+  try {
+    const result = await clientCollection.deleteOne({ email });
+    if (result.deletedCount > 0) {
+      return res.send({
+        success: true,
+        message: "Client deleted successfully",
+      });
+    } else {
+      return res.send({
+        success: false,
+        message: "Client not found in MongoDB",
+      });
+    }
+  } catch (error) {
+    console.error("Delete error:", error);
+    return res
+      .status(500)
+      .send({ success: false, message: "Failed to delete Client" });
+  }
 };

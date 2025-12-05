@@ -1,6 +1,5 @@
 import { ObjectId } from "mongodb";
 import client from "../config/db.js";
-import { deleteFromCloudinary } from "../middleware/deleteCloudinary.js";
 import cloudinary from "../config/cloudinary.js";
 
 const serviceCollection = client.db("nexoro").collection("Services");
