@@ -1,3 +1,4 @@
+import { ObjectId } from "mongodb";
 import client from "../config/db.js";
 
 const clientCollection = client.db("nexoro").collection("Clients");
@@ -60,5 +61,45 @@ export const deleteClient = async (req, res) => {
     return res
       .status(500)
       .send({ success: false, message: "Failed to delete Client" });
+  }
+};
+
+// update client
+export const updateClient = async (req, res) => {
+  try {
+    const id = req.params.id;
+
+    const { client, company, role, email, country, } = req.body;
+    const existingClient = await clientCollection.findOne({ _id: new ObjectId(id) });
+
+    if (!existingClient) {
+      return res.status(404).json({ message: "Client not found" });
+    }
+    const updatedClient = {
+      client,
+      company,
+      role,
+      email,
+      country,
+      joined: new Date(),
+    };
+
+    if (req.file) {
+      if (existingClient.logo?.public_id) {
+        cloudinary.uploader.destroy(existingClient.logo.public_id);
+      }
+      updatedClient.logo = {
+        url: req.file.path,
+        public_id: req.file.filename,
+      };
+    } else {
+      updatedClient.logo = existingClient.logo;
+    }
+
+    await clientCollection.updateOne({ _id: new ObjectId(id) }, { $set: updatedClient });
+    res.status(200).json({ success: true, message: "Client updated successfully" });
+  } catch (error) {
+    console.error("Update client error:", error);
+    res.status(500).json({ success: false, message: "Failed to update client" });
   }
 };
