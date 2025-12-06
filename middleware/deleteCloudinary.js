@@ -12,9 +12,7 @@ export const deleteFromCloudinary = async (req, res, next) => {
     const result = await cloudinary.uploader.destroy(public_id);
 
     if (result.result !== "ok") {
-      return res
-        .status(404)
-        .json({ error: "File not found or already deleted" });
+      return res.status(404).json({ error: "File not found or already deleted" });
     }
 
     // Attach result to request for next handler
