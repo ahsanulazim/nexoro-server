@@ -1,5 +1,6 @@
 import { ObjectId } from "mongodb";
 import client from "../config/db.js";
+import cloudinary from "../config/cloudinary.js";
 
 const clientCollection = client.db("nexoro").collection("Clients");
 await clientCollection.createIndex({ email: 1 }, { unique: true });

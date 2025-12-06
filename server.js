@@ -5,6 +5,7 @@ import userRouter from "./routes/userRouter.js";
 import clientRouter from "./routes/clientRouter.js";
 import msgRouter from "./routes/msgRouter.js";
 import serviceRouter from "./routes/serviceRouter.js";
+import teamRouter from "./routes/teamRouter.js";
 
 dotenv.config();
 const app = express();
@@ -23,6 +24,7 @@ app.use("/users", userRouter);
 app.use("/clients", clientRouter);
 app.use("/messages", msgRouter);
 app.use("/services", serviceRouter);
+app.use("/team", teamRouter);
 
 app.get("/", (req, res) => res.send("Hello World!"));
 
