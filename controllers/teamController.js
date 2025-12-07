@@ -46,34 +46,31 @@ export const deleteMember = async (req, res) => {
 export const updateMember = async (req, res) => {
     try {
         const id = req.params.id;
-        const { title, slug, shortDes, longDes } = req.body;
+        const { memberName, role, gender, email, website, github, behance, linkedin } = req.body;
         const existingMember = await teamCollection.findOne({ _id: new ObjectId(id) });
 
         if (!existingMember) {
             return res.status(404).json({ message: "Member not found" });
         }
         const updatedMember = {
-            title,
-            slug,
-            shortDes,
-            longDes,
-            added: new Date(),
+            memberName, role, gender, email, website, github, behance, linkedin, added: new Date(),
         };
 
         if (req.file) {
-            if (existingMember.icon?.public_id) {
-                cloudinary.uploader.destroy(existingMember.icon.public_id);
+            if (existingMember.public_id) {
+                cloudinary.uploader.destroy(existingMember.public_id);
             }
-            updatedService.icon = req.file.path;
-            updatedService.public_id = req.file.filename;
+            updatedMember.profilePic = req.file.path;
+            updatedMember.public_id = req.file.filename;
         } else {
-            updatedService.icon = existingService.icon;
+            updatedMember.profilePic = existingMember.profilePic;
+            updatedMember.public_id = existingMember.public_id;
         }
 
-        await serviceCollection.updateOne({ _id: new ObjectId(id) }, { $set: updatedService });
-        res.status(200).json({ success: true, message: "Service updated successfully" });
+        await teamCollection.updateOne({ _id: new ObjectId(id) }, { $set: updatedMember });
+        res.status(200).json({ success: true, message: "Member updated successfully" });
     } catch (error) {
-        console.error("Update service error:", error);
-        res.status(500).json({ success: false, message: "Failed to update service" });
+        console.error("Update member error:", error);
+        res.status(500).json({ success: false, message: "Failed to update member" });
     }
 };

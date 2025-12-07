@@ -8,6 +8,6 @@ const router = express.Router();
 router.post("/", upload.single("profilePic"), addMember);
 router.get("/", getAllMembers);
 router.delete("/:id", deleteMember);
-router.put("/:id", updateMember);
+router.put("/:id", upload.single("profilePic"), updateMember);
 
 export default router;
