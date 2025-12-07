@@ -53,7 +53,7 @@ export const updateMember = async (req, res) => {
             return res.status(404).json({ message: "Member not found" });
         }
         const updatedMember = {
-            memberName, role, gender, email, website, github, behance, linkedin, added: new Date(),
+            memberName, role, gender, email, website, github, behance, linkedin, joined: new Date(),
         };
 
         if (req.file) {
