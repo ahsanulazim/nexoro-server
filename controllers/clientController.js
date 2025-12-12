@@ -7,7 +7,7 @@ await clientCollection.createIndex({ email: 1 }, { unique: true });
 
 //create new client
 export const createClient = async (req, res) => {
-  const { client, company, role, email, country } = req.body;
+  const { client, company, role, email, phone, country } = req.body;
   const { filename, path } = req.file;
   const joined = new Date();
   try {
@@ -16,6 +16,7 @@ export const createClient = async (req, res) => {
       company,
       role,
       email,
+      phone,
       country,
       logo: path,
       public_id: filename,
@@ -69,10 +70,7 @@ export const deleteClient = async (req, res) => {
 export const updateClient = async (req, res) => {
   try {
     const id = req.params.id;
-    console.log(id);
-
-
-    const { client, company, role, email, country, } = req.body;
+    const { client, company, role, email, phone, country, } = req.body;
     const existingClient = await clientCollection.findOne({ _id: new ObjectId(id) });
 
     if (!existingClient) {
@@ -83,6 +81,7 @@ export const updateClient = async (req, res) => {
       company,
       role,
       email,
+      phone,
       country,
       joined: new Date(),
     };
