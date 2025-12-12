@@ -69,6 +69,8 @@ export const deleteClient = async (req, res) => {
 export const updateClient = async (req, res) => {
   try {
     const id = req.params.id;
+    console.log(id);
+
 
     const { client, company, role, email, country, } = req.body;
     const existingClient = await clientCollection.findOne({ _id: new ObjectId(id) });
