@@ -21,3 +21,9 @@ export const createReview = async (req, res) => {
         res.status(500).send({ success: false, message: "Failed to create review" });
     }
 };
+
+// Get all Reviews
+export const getAllReviews = async (req, res) => {
+    const reviews = await reviewCollection.find().toArray();
+    res.send(reviews);
+};

@@ -1,10 +1,10 @@
 import express from "express";
-import { createReview } from "../controllers/reviewController.js";
-import upload from "../middleware/uploadCloudinary.js";
+import { createReview, getAllReviews } from "../controllers/reviewController.js";
 
 const router = express.Router();
 
 //Routes
-router.post("/", upload.none(), createReview);
+router.post("/", createReview);
+router.get("/", getAllReviews);
 
 export default router;
