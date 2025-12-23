@@ -18,6 +18,7 @@ export const createClient = async (req, res) => {
       email,
       phone,
       country,
+      slider: false,
       logo: path,
       public_id: filename,
       joined,
@@ -70,8 +71,10 @@ export const deleteClient = async (req, res) => {
 export const updateClient = async (req, res) => {
   try {
     const id = req.params.id;
-    const { client, company, role, email, phone, country, } = req.body;
-    const existingClient = await clientCollection.findOne({ _id: new ObjectId(id) });
+    const { client, company, role, email, phone, country, slider } = req.body;
+    const existingClient = await clientCollection.findOne({
+      _id: new ObjectId(id),
+    });
 
     if (!existingClient) {
       return res.status(404).json({ message: "Client not found" });
@@ -83,6 +86,7 @@ export const updateClient = async (req, res) => {
       email,
       phone,
       country,
+      slider,
       joined: new Date(),
     };
 
@@ -96,10 +100,17 @@ export const updateClient = async (req, res) => {
       updatedClient.logo = existingClient.logo;
     }
 
-    await clientCollection.updateOne({ _id: new ObjectId(id) }, { $set: updatedClient });
-    res.status(200).json({ success: true, message: "Client updated successfully" });
+    await clientCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updatedClient }
+    );
+    res
+      .status(200)
+      .json({ success: true, message: "Client updated successfully" });
   } catch (error) {
     console.error("Update client error:", error);
-    res.status(500).json({ success: false, message: "Failed to update client" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to update client" });
   }
 };
