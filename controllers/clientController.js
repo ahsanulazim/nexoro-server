@@ -86,8 +86,7 @@ export const updateClient = async (req, res) => {
       email,
       phone,
       country,
-      slider,
-      joined: new Date(),
+      slider
     };
 
     if (req.file) {

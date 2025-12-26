@@ -1,9 +1,10 @@
 import express from "express";
-import { createSlider, getAllSliders } from "../controllers/sliderController.js";
+import { deleteClientSlider, updateSliderClients } from "../controllers/sliderController.js";
 
 const router = express.Router();
 
-router.post("/", createSlider);
-router.get("/", getAllSliders);
+//Routes
+router.put("/clients", updateSliderClients)
+router.put("/:id", deleteClientSlider)
 
 export default router;

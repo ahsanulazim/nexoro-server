@@ -1,20 +1,44 @@
+import { ObjectId } from "mongodb";
 import client from "../config/db.js";
 
-const sliderController = client.db("nexoro").collection("Sliders");
+const clientCollection = client.db("nexoro").collection("Clients");
 
-export const createSlider = async (req, res) => {
+// Bulk update endpoint
+export const updateSliderClients = async (req, res) => {
   try {
-    await sliderController.insertOne(req.body);
-    res.status(200).send({ success: true });
+    const { ids, slider } = req.body;
+
+    // Convert string ids to ObjectId
+    const objectIds = ids.map((id) => new ObjectId(id));
+
+    await clientCollection.updateMany(
+      { _id: { $in: objectIds } },
+      { $set: { slider } }
+    );
+
+    await clientCollection.updateMany(
+      { _id: { $nin: objectIds } },
+      { $set: { slider: false } }
+    );
+
+
+    res.json({ success: true });
   } catch (error) {
-    console.error("Create slider error:", error);
-    res
-      .status(500)
-      .send({ success: false, message: "Failed to create slider" });
+    res.status(500).json({ message: "Error updating slider clients" });
   }
 };
 
-export const getAllSliders = async (req, res) => {
-  const sliders = await sliderController.find().toArray();
-  res.send(sliders);
-};
+// update a single client slider
+export const deleteClientSlider = async (req, res) => {
+  try {
+    const { id } = req.params;
+    await clientCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { slider: false } }
+    );
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ message: "Error updating slider status" });
+  }
+
+}
