@@ -8,6 +8,7 @@ import serviceRouter from "./routes/serviceRouter.js";
 import teamRouter from "./routes/teamRouter.js";
 import reviewRouter from "./routes/reviewRouter.js";
 import sliderRouter from "./routes/sliderRouter.js";
+import planRouter from "./routes/planRouter.js";
 
 dotenv.config();
 const app = express();
@@ -15,7 +16,11 @@ const port = process.env.PORT || 5000;
 
 app.use(
   cors({
-    origin: ["http://localhost:3000", "https://nexoro-tau.vercel.app", "https://nexorosolution.com"],
+    origin: [
+      "http://localhost:3000",
+      "https://nexoro-tau.vercel.app",
+      "https://nexorosolution.com",
+    ],
     credentials: true,
   })
 );
@@ -29,6 +34,7 @@ app.use("/services", serviceRouter);
 app.use("/team", teamRouter);
 app.use("/reviews", reviewRouter);
 app.use("/sliders", sliderRouter);
+app.use("/plans", planRouter);
 
 app.get("/", (req, res) => res.send("Hello World!"));
 
