@@ -33,6 +33,18 @@ export const createBlog = async (req, res) => {
 };
 
 export const getAllBlogs = async (req, res) => {
-    const blogs = await blogCollection.find().toArray();
+    const blogs = await blogCollection.aggregate([
+        {
+            $lookup: {
+                from: "Categories",
+                localField: "categoryId",
+                foreignField: "_id",
+                as: "category"
+            }
+        },
+        {
+            $unwind: "$category"
+        }
+    ]).toArray();
     res.send(blogs)
 }
