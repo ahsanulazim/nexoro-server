@@ -6,10 +6,6 @@ const reviewCollection = client.db("nexoro").collection("Reviews");
 //create new client
 export const createReview = async (req, res) => {
     const { clientName, rating, review } = req.body;
-
-    console.log(req.body);
-
-
     const added = new Date();
     try {
         await reviewCollection.insertOne({ clientName, rating, review, added });

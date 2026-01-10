@@ -1,3 +1,4 @@
+import { ObjectId } from "mongodb";
 import client from "../config/db.js";
 
 const blogCollection = client.db("nexoro").collection("Blogs");
@@ -7,6 +8,7 @@ await blogCollection.createIndex({ slug: 1 }, { unique: true });
 export const createBlog = async (req, res) => {
     const { title, slug, content, author, category, description, visibility } = req.body;
     const visible = visibility === "true";
+    const categoryId = new ObjectId(category)
     const { filename, path } = req.file;
     const added = new Date();
     try {
@@ -15,7 +17,7 @@ export const createBlog = async (req, res) => {
             slug,
             content,
             author,
-            category,
+            categoryId,
             description,
             visibility: visible,
             image: path,
@@ -29,3 +31,8 @@ export const createBlog = async (req, res) => {
         } res.status(500).send({ success: false, message: "Failed to create blog post" });
     }
 };
+
+export const getAllBlogs = async (req, res) => {
+    const blogs = await blogCollection.find().toArray();
+    res.send(blogs)
+}
