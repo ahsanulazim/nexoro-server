@@ -1,5 +1,6 @@
 import { ObjectId } from "mongodb";
 import client from "../config/db.js";
+import cloudinary from "../config/cloudinary.js";
 
 const blogCollection = client.db("nexoro").collection("Blogs");
 await blogCollection.createIndex({ slug: 1 }, { unique: true });
@@ -94,7 +95,7 @@ export const getBlog = async (req, res) => {
 export const deleteBlog = async (req, res) => {
     const id = req.params.id
     try {
-        const result = blogCollection.deleteOne({ _id: new ObjectId(id) })
+        const result = await blogCollection.deleteOne({ _id: new ObjectId(id) })
         if (result.deletedCount > 0) {
             return res.send({
                 success: true,
@@ -109,4 +110,35 @@ export const deleteBlog = async (req, res) => {
     } catch (error) {
         return res.status(500).send({ success: false, message: "Failed to delete Blog" });
     }
+}
+
+export const updateBlog = async (req, res) => {
+    const id = req.params.id
+    const { title, slug, content, author, category, description, visibility } = req.body;
+    const visible = visibility === "true";
+    const categoryId = new ObjectId(category)
+    try {
+        const existingBlog = await blogCollection.findOne({ _id: new ObjectId(id) });
+        if (!existingBlog) {
+            return res.status(404).json({ message: "Blog not found" });
+        }
+
+        const updatedBlog = { title, slug, content, author, description, categoryId, visible, updatedOn: new Date() }
+
+        if (req.file) {
+            if (existingBlog.public_id) {
+                cloudinary.uploader.destroy(existingBlog.public_id);
+            }
+            updatedBlog.image = req.file.path;
+            updatedBlog.public_id = req.file.filename;
+        } else {
+            updatedBlog.image = existingBlog.image;
+        }
+        await blogCollection.updateOne({ _id: new ObjectId(id) }, { $set: updatedBlog })
+        res.status(200).json({ success: true, message: "Blog Updated Successfully" });
+    } catch (error) {
+        console.error("Update Blog error:", error);
+        res.status(500).json({ success: false, message: "Failed to Update Blog" });
+    }
+
 }
