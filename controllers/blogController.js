@@ -94,6 +94,7 @@ export const getBlog = async (req, res) => {
 
 export const deleteBlog = async (req, res) => {
     const id = req.params.id
+
     try {
         const result = await blogCollection.deleteOne({ _id: new ObjectId(id) })
         if (result.deletedCount > 0) {
