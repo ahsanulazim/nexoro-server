@@ -42,7 +42,6 @@ export const deleteReviews = async (req, res) => {
             });
         }
     } catch (error) {
-        console.error("Delete error:", error);
         return res
             .status(500)
             .send({ success: false, message: "Failed to delete Review" });

@@ -72,8 +72,6 @@ export const updateUser = async (req, res) => {
 // Delete user
 export const deleteUser = async (req, res) => {
   const email = req.params.remove;
-  console.log(email);
-
   try {
     const userRecord = await admin.auth().getUserByEmail(email);
     await admin.auth().deleteUser(userRecord.uid);

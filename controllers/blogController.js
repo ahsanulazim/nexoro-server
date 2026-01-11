@@ -48,3 +48,65 @@ export const getAllBlogs = async (req, res) => {
     ]).toArray();
     res.send(blogs)
 }
+
+export const getBlog = async (req, res) => {
+    const slug = req.params.slug
+    try {
+        const blog = await blogCollection.aggregate([
+            {
+                $match: { slug }
+            },
+            {
+                $lookup: {
+                    from: "Categories",
+                    localField: "categoryId",
+                    foreignField: "_id",
+                    as: "category"
+                }
+            },
+            {
+                $unwind: "$category"
+            },
+            {
+                $replaceRoot: {
+                    newRoot: {
+                        $mergeObjects: [
+                            "$$ROOT",
+                            { category: "$category.category" }
+                        ]
+                    }
+                }
+
+            }
+
+        ]).toArray();
+
+        if (blog) {
+            return res.status(200).json(blog[0]);
+        } else {
+            return res.status(404).json({ success: false, message: "Blog not found" });
+        }
+    } catch (error) {
+        return res.status(500).json({ success: false, message: "Internal server error" });
+    }
+}
+
+export const deleteBlog = async (req, res) => {
+    const id = req.params.id
+    try {
+        const result = blogCollection.deleteOne({ _id: new ObjectId(id) })
+        if (result.deletedCount > 0) {
+            return res.send({
+                success: true,
+                message: "Blog deleted successfully",
+            });
+        } else {
+            return res.send({
+                success: false,
+                message: "Blog not found in MongoDB",
+            });
+        }
+    } catch (error) {
+        return res.status(500).send({ success: false, message: "Failed to delete Blog" });
+    }
+}
