@@ -34,6 +34,13 @@ export const createBlog = async (req, res) => {
 };
 
 export const getAllBlogs = async (req, res) => {
+
+    const page = Math.max(parseInt(req.query.page) || 1, 1);
+    const limit = Math.min(parseInt(req.query.limit) || 10, 20);
+    const skip = (page - 1) * limit;
+
+    const totalBlogs = await blogCollection.countDocuments();
+
     const blogs = await blogCollection.aggregate([
         {
             $lookup: {
@@ -45,9 +52,12 @@ export const getAllBlogs = async (req, res) => {
         },
         {
             $unwind: "$category"
-        }
+        },
+        { $sort: { added: -1 } },
+        { $skip: skip },
+        { $limit: limit },
     ]).toArray();
-    res.send(blogs)
+    res.send({ blogs, totalBlogs, totalPages: Math.ceil(totalBlogs / limit), currentPage: page, hasNext: page * limit < totalBlogs, hasPrev: page > 1 })
 }
 
 export const getBlog = async (req, res) => {
