@@ -57,7 +57,16 @@ export const getAllBlogs = async (req, res) => {
         { $skip: skip },
         { $limit: limit },
     ]).toArray();
-    res.send({ blogs, totalBlogs, totalPages: Math.ceil(totalBlogs / limit), currentPage: page, hasNext: page * limit < totalBlogs, hasPrev: page > 1 })
+    res.send({
+        blogs,
+        totalBlogs,
+        totalPages: Math.ceil(totalBlogs / limit),
+        currentPage: page,
+        hasNext: page * limit < totalBlogs,
+        hasPrev: page > 1,
+        start: skip + 1,
+        end: Math.min(skip + limit, totalBlogs)
+    })
 }
 
 export const getBlog = async (req, res) => {
