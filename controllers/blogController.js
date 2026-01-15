@@ -1,14 +1,17 @@
 import { ObjectId } from "mongodb";
 import client from "../config/db.js";
 import cloudinary from "../config/cloudinary.js";
+import { sanitizeAndNormalize } from "../utils/sanitize.js";
 
 const blogCollection = client.db("nexoro").collection("Blogs");
 await blogCollection.createIndex({ slug: 1 }, { unique: true });
 
 // Create a new blog post
 export const createBlog = async (req, res) => {
-  const { title, slug, content, author, category, description, visibility } =
+  const { title, content, author, category, description, visibility } =
     req.body;
+  const safeContent = sanitizeAndNormalize(content)
+  const slug = title.toString().toLowerCase().trim().replace(/[\s\W-]+/g, "-");
   const visible = visibility === "true";
   const categoryId = new ObjectId(category);
   const { filename, path } = req.file;
@@ -17,7 +20,7 @@ export const createBlog = async (req, res) => {
     await blogCollection.insertOne({
       title,
       slug,
-      content,
+      content: safeContent,
       author,
       categoryId,
       description,
