@@ -41,6 +41,21 @@ export const getAllServices = async (req, res) => {
   res.send(services);
 };
 
+// Get a Service
+export const getService = async (req, res) => {
+  const slug = req.params.slug;
+  try {
+    const service = await serviceCollection.findOne({ slug });
+    if (service) {
+      return res.status(200).json(service);
+    } else {
+      return res.status(404).json({ success: false, message: "Service not found" });
+    }
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
 // Delete services
 export const deleteServices = async (req, res) => {
   const slug = req.params.slug;
@@ -59,9 +74,7 @@ export const deleteServices = async (req, res) => {
     }
   } catch (error) {
     console.error("Delete error:", error);
-    return res
-      .status(500)
-      .send({ success: false, message: "Failed to delete Service" });
+    return res.status(500).send({ success: false, message: "Failed to delete Service" });
   }
 };
 
