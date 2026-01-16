@@ -120,7 +120,7 @@ export const getBlog = async (req, res) => {
   }
 };
 
-export const deleteBlog = async (req, res) => {
+export const deleteABlog = async (req, res) => {
   const id = req.params.id;
 
   try {
