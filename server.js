@@ -10,6 +10,7 @@ import reviewRouter from "./routes/reviewRouter.js";
 import sliderRouter from "./routes/sliderRouter.js";
 import planRouter from "./routes/planRouter.js";
 import blogRouter from "./routes/blogRouter.js";
+import portfolioRouter from "./routes/portfolioRouter.js";
 import categoryRouter from "./routes/categoryRouter.js";
 
 dotenv.config();
@@ -38,6 +39,7 @@ app.use("/reviews", reviewRouter);
 app.use("/sliders", sliderRouter);
 app.use("/plans", planRouter);
 app.use("/blogs", blogRouter);
+app.use("/portfolio", portfolioRouter);
 app.use("/category", categoryRouter);
 
 app.get("/", (req, res) => res.send("Hello World!"));
