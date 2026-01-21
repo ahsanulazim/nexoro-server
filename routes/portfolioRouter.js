@@ -4,6 +4,7 @@ import {
   deleteAPortfolio,
   getAllPortfolios,
   getPortfolio,
+  getPortfolioServices,
   updatePortfolio,
 } from "../controllers/portfolioController.js";
 import upload from "../middleware/uploadCloudinary.js";
@@ -14,6 +15,7 @@ const router = express.Router();
 router.post("/", upload.single("image"), createPortfolio);
 router.post("/portfolioImages", upload.array("images"));
 router.get("/allPortfolios", getAllPortfolios);
+router.get("/categories", getPortfolioServices);
 router.get("/:slug", getPortfolio);
 router.delete("/:id", deleteFromCloudinary, deleteAPortfolio);
 router.put("/:id", upload.single("image"), updatePortfolio);

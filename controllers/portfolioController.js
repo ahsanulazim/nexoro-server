@@ -43,10 +43,13 @@ export const getAllPortfolios = async (req, res) => {
   const page = Math.max(parseInt(req.query.page) || 1, 1);
   const limit = Math.min(parseInt(req.query.limit) || 10, 20);
   const skip = (page - 1) * limit;
+  const categoryId = req.query.category;
+  const filter = categoryId ? { serviceId: new ObjectId(categoryId) } : {};
 
   const totalPortfolios = await portfolioCollection.countDocuments();
 
   const portfolios = await portfolioCollection.aggregate([
+    { $match: filter },
     {
       $lookup: {
         from: "Services",
@@ -73,6 +76,40 @@ export const getAllPortfolios = async (req, res) => {
     start: skip + 1,
     end: Math.min(skip + limit, totalPortfolios),
   });
+};
+
+export const getPortfolioServices = async (req, res) => {
+  try {
+    const allServices = await portfolioCollection.aggregate([
+      {
+        $lookup: {
+          from: "Services",
+          localField: "serviceId",
+          foreignField: "_id",
+          as: "service",
+        },
+      },
+      { $unwind: "$service" },
+      {
+        $group: {
+          _id: "$service._id",
+          serviceTitle: { $first: "$service.title" },
+        },
+      },
+      {
+        $project: {
+          _id: 1,
+          serviceTitle: 1,
+        },
+      },
+    ]).toArray();
+
+    res.status(200).json({ allServices });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch services" });
+  }
 };
 
 export const getPortfolio = async (req, res) => {
