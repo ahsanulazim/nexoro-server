@@ -39,15 +39,62 @@ export const getUser = async (req, res) => {
   }
 };
 
-// Get all users
+// Get all customers
 export const getAllUsers = async (req, res) => {
   try {
-    const users = await userCollection.find({ role: "customer" }).toArray();
-    res.status(200).json(users);
+    const customer = await userCollection.find({ role: "customer" }).toArray();
+    res.status(200).json(customer);
   } catch (error) {
-    res.status(500).json({ message: "Failed to fetch users", error });
+    res.status(500).json({ message: "Failed to fetch customers", error });
   }
 };
+
+//Get all members
+export const getAllMembers = async (req, res) => {
+  try {
+    const members = await userCollection.find({ role: "member" }).toArray();
+    res.status(200).json(members);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to fetch members", error });
+  }
+};
+
+// Promote User
+export const promoteUser = async (req, res) => {
+  const email = req.params.email;
+  try {
+    const user = await userCollection.updateOne(
+      { email },
+      { $set: { role: "member" } }
+    );
+    if (user.modifiedCount > 0) {
+      res.status(200).send({ success: true, message: "User promoted to member" });
+    } else {
+      res.status(404).send({ success: false, message: "User not found" });
+    }
+  } catch (error) {
+    console.error("Update error:", error);
+    res.status(500).send({ success: false, message: "Internal server error" });
+  }
+}
+// demote Member
+export const demoteMember = async (req, res) => {
+  const email = req.params.email;
+  try {
+    const user = await userCollection.updateOne(
+      { email },
+      { $set: { role: "customer" } }
+    );
+    if (user.modifiedCount > 0) {
+      res.status(200).send({ success: true, message: "Member demoted to customer" });
+    } else {
+      res.status(404).send({ success: false, message: "Member not found" });
+    }
+  } catch (error) {
+    console.error("Update error:", error);
+    res.status(500).send({ success: false, message: "Internal server error" });
+  }
+}
 
 // Update user
 export const updateUser = async (req, res) => {

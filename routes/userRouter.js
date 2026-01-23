@@ -2,8 +2,11 @@ import express from "express";
 import {
   createUser,
   deleteUser,
+  demoteMember,
+  getAllMembers,
   getAllUsers,
   getUser,
+  promoteUser,
   updateUser,
 } from "../controllers/userController.js";
 import { verifyId } from "../middleware/verifyId.js";
@@ -15,7 +18,10 @@ const router = express.Router();
 router.post("/", createUser);
 router.get("/:email", getUser);
 router.get("/", verifyId, verifyAdmin, getAllUsers);
+router.get("/team/members", getAllMembers);
 router.put("/:email", updateUser);
+router.put("/promote/:email", promoteUser);
+router.put("/demote/:email", demoteMember);
 router.delete("/:remove", verifyId, verifyAdmin, deleteUser);
 
 export default router;
