@@ -4,6 +4,7 @@ import {
   deleteABlog,
   getAllBlogs,
   getBlog,
+  getLatestBlogs,
   updateBlog,
 } from "../controllers/blogController.js";
 import upload from "../middleware/uploadCloudinary.js";
@@ -13,6 +14,7 @@ const router = express.Router();
 
 router.post("/", upload.single("image"), createBlog);
 router.get("/allBlogs", getAllBlogs);
+router.get("/latestBlogs", getLatestBlogs);
 router.get("/:slug", getBlog);
 router.delete("/:id", deleteFromCloudinary, deleteABlog);
 router.put("/:id", upload.single("image"), updateBlog);

@@ -120,6 +120,29 @@ export const getBlog = async (req, res) => {
   }
 };
 
+export const getLatestBlogs = async (req, res) => {
+  try {
+    const latestBlogs = await blogCollection.aggregate([
+      {
+        $lookup: {
+          from: "Categories",
+          localField: "categoryId",
+          foreignField: "_id",
+          as: "category",
+        },
+      },
+      { $unwind: "$category" },
+      { $sort: { added: -1 } },
+      { $limit: 6 },
+    ]).toArray();
+    res.status(200).json(latestBlogs);
+  } catch (error) {
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch latest blogs" });
+  }
+};
+
 export const deleteABlog = async (req, res) => {
   const id = req.params.id;
 
