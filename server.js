@@ -12,6 +12,7 @@ import planRouter from "./routes/planRouter.js";
 import blogRouter from "./routes/blogRouter.js";
 import portfolioRouter from "./routes/portfolioRouter.js";
 import categoryRouter from "./routes/categoryRouter.js";
+import cartRouter from "./routes/cartRouter.js";
 
 dotenv.config();
 const app = express();
@@ -41,6 +42,7 @@ app.use("/plans", planRouter);
 app.use("/blogs", blogRouter);
 app.use("/portfolio", portfolioRouter);
 app.use("/category", categoryRouter);
+app.use("/cart", cartRouter);
 
 app.get("/", (req, res) => res.send("Hello World!"));
 

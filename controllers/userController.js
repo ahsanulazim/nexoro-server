@@ -135,3 +135,19 @@ export const deleteUser = async (req, res) => {
       .send({ success: false, message: "Failed to delete user" });
   }
 };
+
+//create order
+export const createOrder = async (req, res) => {
+  const { email, slug, id } = req.params
+  try {
+    const user = await userCollection.findOne({ email }, { $set: { order: [{ service: slug, plan: id, added: new Date() }] } });
+    if (user.modifiedCount > 0) {
+      res.status(200).send({ success: true, message: "Order Created" });
+    } else {
+      res.status(404).send({ success: false, message: "User not found" });
+    }
+  } catch (error) {
+    console.error("Order error:", error)
+    return res.status(500).send({ success: false, message: "Failed to create order" })
+  }
+}

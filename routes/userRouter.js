@@ -1,5 +1,6 @@
 import express from "express";
 import {
+  createOrder,
   createUser,
   deleteUser,
   demoteMember,
@@ -22,6 +23,7 @@ router.get("/team/members", getAllMembers);
 router.put("/:email", updateUser);
 router.put("/promote/:email", promoteUser);
 router.put("/demote/:email", demoteMember);
+router.put("/cart/:email/:slug/plans/:id", createOrder);
 router.delete("/:remove", verifyId, verifyAdmin, deleteUser);
 
 export default router;
