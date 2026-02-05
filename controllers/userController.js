@@ -1,5 +1,6 @@
 import client from "../config/db.js";
 import admin from "../admin/firebase.config.js";
+import { ObjectId } from "mongodb";
 
 const userCollection = client.db("nexoro").collection("Users");
 await userCollection.createIndex({ email: 1 }, { unique: true });
@@ -140,7 +141,10 @@ export const deleteUser = async (req, res) => {
 export const createOrder = async (req, res) => {
   const { email, slug, id } = req.params
   try {
-    const user = await userCollection.findOne({ email }, { $set: { order: [{ service: slug, plan: id, added: new Date() }] } });
+    const user = await userCollection.updateOne(
+      { email },
+      { $push: { order: { _id: new ObjectId(), service: slug, plan: new ObjectId(id), added: new Date() } } }
+    );
     if (user.modifiedCount > 0) {
       res.status(200).send({ success: true, message: "Order Created" });
     } else {
