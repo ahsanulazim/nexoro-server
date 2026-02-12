@@ -15,7 +15,7 @@ const router = express.Router();
 router.post("/", upload.single("image"), createBlog);
 router.get("/allBlogs", getAllBlogs);
 router.get("/latestBlogs", getLatestBlogs);
-router.get("/:slug", getBlog);
+router.get("/getBlog/:slug", getBlog);
 router.delete("/:id", deleteFromCloudinary, deleteABlog);
 router.put("/:id", upload.single("image"), updateBlog);
 

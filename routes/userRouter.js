@@ -17,7 +17,7 @@ const router = express.Router();
 
 // routes
 router.post("/", createUser);
-router.get("/:email", getUser);
+router.get("/getUser/:email", getUser);
 router.get("/", verifyId, verifyAdmin, getAllUsers);
 router.get("/team/members", getAllMembers);
 router.put("/:email", updateUser);
