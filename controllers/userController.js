@@ -26,7 +26,7 @@ export const createUser = async (req, res) => {
 
 // Get single user
 export const getUser = async (req, res) => {
-  const email = req.params.email;
+  const email = req.query.email;
   try {
     const user = await userCollection.findOne({ email });
     if (user) {
