@@ -62,7 +62,7 @@ export const getAllMembers = async (req, res) => {
 
 // Promote User
 export const promoteUser = async (req, res) => {
-  const email = req.params.email;
+  const email = req.query.email;
   try {
     const user = await userCollection.updateOne(
       { email },
@@ -80,7 +80,7 @@ export const promoteUser = async (req, res) => {
 }
 // demote Member
 export const demoteMember = async (req, res) => {
-  const email = req.params.email;
+  const email = req.query.email;
   try {
     const user = await userCollection.updateOne(
       { email },
@@ -119,7 +119,7 @@ export const updateUser = async (req, res) => {
 
 // Delete user
 export const deleteUser = async (req, res) => {
-  const email = req.params.remove;
+  const email = req.query.email;
   try {
     const userRecord = await admin.auth().getUserByEmail(email);
     await admin.auth().deleteUser(userRecord.uid);
@@ -139,11 +139,11 @@ export const deleteUser = async (req, res) => {
 
 //create order
 export const createOrder = async (req, res) => {
-  const { email, slug, id } = req.params
+  const { email, slug, plan } = req.query;
   try {
     const user = await userCollection.updateOne(
       { email },
-      { $push: { order: { _id: new ObjectId(), service: slug, plan: new ObjectId(id), added: new Date() } } }
+      { $push: { order: { _id: new ObjectId(), service: slug, plan, added: new Date() } } }
     );
     if (user.modifiedCount > 0) {
       res.status(200).send({ success: true, message: "Order Created" });

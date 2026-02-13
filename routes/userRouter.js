@@ -21,9 +21,9 @@ router.get("/getUser", getUser);
 router.get("/", verifyId, verifyAdmin, getAllUsers);
 router.get("/team/members", getAllMembers);
 router.put("/:email", updateUser);
-router.put("/promote/:email", promoteUser);
-router.put("/demote/:email", demoteMember);
-router.put("/cart/:email/:slug/plans/:id", createOrder);
-router.delete("/:remove", verifyId, verifyAdmin, deleteUser);
+router.put("/promote", promoteUser);
+router.put("/demote", demoteMember);
+router.put("/cart", createOrder);
+router.delete("/delete", verifyId, verifyAdmin, deleteUser);
 
 export default router;
