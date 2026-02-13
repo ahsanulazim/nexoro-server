@@ -99,7 +99,7 @@ export const demoteMember = async (req, res) => {
 
 // Update user
 export const updateUser = async (req, res) => {
-  const email = req.params.email;
+  const email = req.query.email;
   const updatedData = req.body;
   try {
     const result = await userCollection.updateOne(

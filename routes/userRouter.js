@@ -20,7 +20,7 @@ router.post("/", createUser);
 router.get("/getUser", getUser);
 router.get("/", verifyId, verifyAdmin, getAllUsers);
 router.get("/team/members", getAllMembers);
-router.put("/:email", updateUser);
+router.put("/updateUser", updateUser);
 router.put("/promote", promoteUser);
 router.put("/demote", demoteMember);
 router.put("/cart", createOrder);
