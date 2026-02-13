@@ -63,6 +63,10 @@ export const getAllMembers = async (req, res) => {
 // Promote User
 export const promoteUser = async (req, res) => {
   const email = req.query.email;
+  if (!email) {
+    return res.status(400).json({ success: false, message: "Email query param required" });
+  }
+
   try {
     const user = await userCollection.updateOne(
       { email },
@@ -81,6 +85,10 @@ export const promoteUser = async (req, res) => {
 // demote Member
 export const demoteMember = async (req, res) => {
   const email = req.query.email;
+  if (!email) {
+    return res.status(400).json({ success: false, message: "Email query param required" });
+  }
+
   try {
     const user = await userCollection.updateOne(
       { email },
@@ -100,6 +108,10 @@ export const demoteMember = async (req, res) => {
 // Update user
 export const updateUser = async (req, res) => {
   const email = req.query.email;
+  if (!email) {
+    return res.status(400).json({ success: false, message: "Email query param required" });
+  }
+
   const updatedData = req.body;
   try {
     const result = await userCollection.updateOne(
