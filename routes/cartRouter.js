@@ -4,6 +4,6 @@ import { addToCart } from "../controllers/cartController.js";
 const router = express.Router();
 
 //Routes
-router.get("/:slug/plans/:id", addToCart);
+router.get("/checkout", addToCart);
 
 export default router;

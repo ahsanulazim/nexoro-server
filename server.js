@@ -13,6 +13,7 @@ import blogRouter from "./routes/blogRouter.js";
 import portfolioRouter from "./routes/portfolioRouter.js";
 import categoryRouter from "./routes/categoryRouter.js";
 import cartRouter from "./routes/cartRouter.js";
+import orderRouter from "./routes/orderRouter.js";
 
 dotenv.config();
 const app = express();
@@ -22,7 +23,6 @@ app.use(
   cors({
     origin: [
       "http://localhost:3000",
-      "https://nexoro-tau.vercel.app",
       "https://nexorosolution.com",
     ],
     credentials: true,
@@ -43,6 +43,7 @@ app.use("/blogs", blogRouter);
 app.use("/portfolio", portfolioRouter);
 app.use("/category", categoryRouter);
 app.use("/cart", cartRouter);
+app.use("/orders", orderRouter);
 
 app.get("/", (req, res) => res.send("Hello World!"));
 

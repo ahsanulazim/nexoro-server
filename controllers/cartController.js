@@ -5,14 +5,14 @@ const serviceCollection = client.db("nexoro").collection("Services");
 
 // Add service to cart
 export const addToCart = async (req, res) => {
-    const { slug, id } = req.params;
+    const { slug, planId } = req.query;
     try {
         const service = await serviceCollection.findOne({ slug });
         if (!service) {
             return res.status(404).send({ success: false, message: "Service not found" });
         }
-        const planId = new ObjectId(id);
-        const plan = service.plans.find((plan) => plan.id.equals(planId));
+        const planIdObj = new ObjectId(planId);
+        const plan = service.plans.find((plan) => plan.id.equals(planIdObj));
         if (!plan) {
             return res.status(404).send({ success: false, message: "Plan not found" });
         }
