@@ -7,9 +7,10 @@ await portfolioCollection.createIndex({ slug: 1 }, { unique: true });
 
 // Create a new blog post
 export const createPortfolio = async (req, res) => {
-  const { title, content, author, service, description, visibility } = req.body;
+  const { title, content, author, service, description, visibility, carousel } = req.body;
   const slug = title.toString().toLowerCase().trim().replace(/[\s\W-]+/g, "-");
   const visible = visibility === "true";
+  const homepage = carousel === "true";
   const serviceId = new ObjectId(service);
   const { filename, path } = req.file;
   const added = new Date();
@@ -19,6 +20,7 @@ export const createPortfolio = async (req, res) => {
       slug,
       content,
       author,
+      carousel: homepage,
       serviceId,
       description,
       visibility: visible,
@@ -180,9 +182,10 @@ export const deleteAPortfolio = async (req, res) => {
 
 export const updatePortfolio = async (req, res) => {
   const id = req.params.id;
-  const { title, content, author, category, description, visibility } =
+  const { title, content, author, carousel, category, description, visibility } =
     req.body;
   const visible = visibility === "true";
+  const homepage = carousel === "true";
   const categoryId = new ObjectId(category);
   try {
     const existingPortfolio = await portfolioCollection.findOne({
@@ -196,9 +199,10 @@ export const updatePortfolio = async (req, res) => {
       title,
       content,
       author,
+      carousel: homepage,
       description,
       categoryId,
-      visible,
+      visibility: visible,
       updatedOn: new Date(),
     };
 
