@@ -14,6 +14,7 @@ import portfolioRouter from "./routes/portfolioRouter.js";
 import categoryRouter from "./routes/categoryRouter.js";
 import cartRouter from "./routes/cartRouter.js";
 import orderRouter from "./routes/orderRouter.js";
+import paymentRouter from "./routes/paymentRouter.js";
 
 dotenv.config();
 const app = express();
@@ -44,6 +45,7 @@ app.use("/portfolio", portfolioRouter);
 app.use("/category", categoryRouter);
 app.use("/cart", cartRouter);
 app.use("/orders", orderRouter);
+app.use("/payment", paymentRouter);
 
 app.get("/", (req, res) => res.send("Hello World!"));
 
