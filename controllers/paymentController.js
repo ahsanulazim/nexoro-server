@@ -1,4 +1,8 @@
 import crypto from "crypto";
+import { getNextOrderId } from "./orderController.js";
+import client from "../config/db.js";
+
+const serviceCollection = client.db("nexoro").collection("Services");
 
 //generate hash
 
@@ -39,11 +43,12 @@ export const getToken = async (req, res) => {
 export const handlePayment = async (req, res) => {
   try {
     const { token, slug, plan, customer } = req.body;
+    const orderId = await getNextOrderId();
     const merchantTransactionId = Date.now().toString();
-    const xHash = generateHash(
-      process.env.EPS_USERNAME,
-      process.env.EPS_HASH_KEY,
-    );
+    const service = await serviceCollection.findOne({ slug });
+    const planDetails = service.plans.find((p) => p.id.toString() === plan);
+
+    const xHash = generateHash(merchantTransactionId, process.env.EPS_HASH_KEY);
 
     const response = await fetch(
       `${process.env.EPS_URL}/EPSEngine/InitializeEPS`,
@@ -57,22 +62,22 @@ export const handlePayment = async (req, res) => {
         body: JSON.stringify({
           merchantId: process.env.EPS_MERCHANT_ID,
           storeId: process.env.EPS_STORE_ID,
-          CustomerOrderId: "Order" + Date.now(),
+          CustomerOrderId: orderId,
           merchantTransactionId,
           transactionTypeId: 1,
-          totalAmount: plan.price,
-          successUrl: "https://yourdomain.com/success",
-          failUrl: "https://yourdomain.com/fail",
-          cancelUrl: "https://yourdomain.com/cancel",
+          totalAmount: planDetails.price,
+          successUrl: `${process.env.FRONTEND_URL}/payment-successful`,
+          failUrl: `${process.env.FRONTEND_URL}/payment-failed`,
+          cancelUrl: `${process.env.FRONTEND_URL}/payment-cancelled`,
           customerName: customer.fullname,
           customerEmail: customer.email,
           customerAddress: customer.address,
           customerCity: customer.city,
-          customerState: "Dhaka",
-          customerPostcode: customer.postcode,
-          customerCountry: "BD",
+          customerState: customer.state,
+          customerPostcode: customer.zip,
+          customerCountry: customer.country.value,
           customerPhone: customer.phone,
-          productName: slug,
+          productName: service.title + " - " + planDetails.planName,
         }),
       },
     );
