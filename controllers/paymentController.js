@@ -88,3 +88,40 @@ export const handlePayment = async (req, res) => {
     res.status(500).json({ error: "Payment Initialization Failed" });
   }
 };
+
+//verify payment
+export const verifyPayment = async (req, res, next) => {
+  try {
+    const { merchantTransactionId } = req.query;
+
+    const token = req.headers.authorization?.replace("Bearer ", "");
+
+    const xHash = generateHash(merchantTransactionId, process.env.EPS_HASH_KEY);
+
+    const response = await fetch(
+      `${process.env.EPS_URL}/EPSEngine/CheckMerchantTransactionStatus?merchantTransactionId=${merchantTransactionId}`,
+      {
+        method: "GET",
+        headers: {
+          "x-hash": xHash,
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    );
+    const data = await response.json();
+
+    if (data.Status === "Success") {
+      // Here you would typically update your order status in the database
+      // For example: await orderCollection.updateOne({ orderId }, { $set: { status: "Paid" } });
+      req.paymentData = data; // চাইলে orderController এ use করার জন্য attach করতে পারো
+      return next();
+    } else {
+      return res.json({
+        success: false,
+        message: "Payment verification failed",
+      });
+    }
+  } catch (error) {
+    res.status(500).json({ error: "Payment Verification Failed" });
+  }
+};

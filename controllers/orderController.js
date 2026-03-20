@@ -21,6 +21,7 @@ export const getNextOrderId = async () => {
 //create order
 export const createOrder = async (req, res) => {
   const { uid, slug, planId } = req.query;
+
   try {
     const orderId = await getNextOrderId();
 
@@ -30,6 +31,7 @@ export const createOrder = async (req, res) => {
       service: slug,
       planId,
       status: "Pending",
+      paymentData: req.paymentData || null,
       createdAt: new Date(),
     });
     res.status(200).send({ success: true, orderId: order.insertedId });
@@ -44,10 +46,21 @@ export const createOrder = async (req, res) => {
 //get all orders
 export const getAllOrders = async (req, res) => {
   try {
+    // query থেকে page number নাও, default 1
+    const page = parseInt(req.query.page) || 1;
+    const limit = 12; // প্রতি পেজে 12টা order
+    const skip = (page - 1) * limit;
+
+    // মোট order count বের করো
+    const totalOrders = await orderCollection.countDocuments();
+
     const orders = await orderCollection
       .find()
       .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
       .toArray();
+
     const enrichedOrders = await Promise.all(
       orders.map(async (order) => {
         // Firebase থেকে user info
@@ -87,7 +100,19 @@ export const getAllOrders = async (req, res) => {
         };
       }),
     );
-    res.status(200).json({ success: true, orders: enrichedOrders });
+    res.status(200).json({
+      success: true,
+      orders: enrichedOrders,
+      pagination: {
+        currentPage: page,
+        totalPages: Math.ceil(totalOrders / limit),
+        totalOrders,
+        hasNext: page * limit < totalOrders,
+        hasPrev: page > 1,
+        start: skip + 1,
+        end: Math.min(skip + limit, totalOrders),
+      },
+    });
   } catch (error) {
     console.error("Get orders error:", error);
     res.status(500).json({ success: false, message: "Failed to fetch orders" });
@@ -117,5 +142,49 @@ export const getOrder = async (req, res) => {
   } catch (error) {
     console.error("Get order error:", error);
     res.status(500).json({ success: false, message: "Failed to fetch order" });
+  }
+};
+
+//update order status
+export const updateOrderStatus = async (req, res) => {
+  const { orderId } = req.params;
+  const { status } = req.body;
+  try {
+    const result = await orderCollection.updateOne(
+      { _id: new ObjectId(orderId) },
+      { $set: { status } },
+    );
+    if (result.modifiedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found or status unchanged",
+      });
+    }
+    res.status(200).json({ success: true, message: "Order status updated" });
+  } catch (error) {
+    console.error("Update order status error:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to update order status" });
+  }
+};
+
+//delete order
+export const deleteOrder = async (req, res) => {
+  const { orderId } = req.params;
+
+  try {
+    const result = await orderCollection.deleteOne({
+      _id: new ObjectId(orderId),
+    });
+    if (result.deletedCount === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
+    }
+    res.status(200).json({ success: true, message: "Order deleted" });
+  } catch (error) {
+    console.error("Delete order error:", error);
+    res.status(500).json({ success: false, message: "Failed to delete order" });
   }
 };
