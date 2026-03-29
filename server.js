@@ -12,6 +12,7 @@ import planRouter from "./routes/planRouter.js";
 import blogRouter from "./routes/blogRouter.js";
 import portfolioRouter from "./routes/portfolioRouter.js";
 import categoryRouter from "./routes/categoryRouter.js";
+import subServiceRouter from "./routes/subServiceRouter.js";
 import cartRouter from "./routes/cartRouter.js";
 import orderRouter from "./routes/orderRouter.js";
 import paymentRouter from "./routes/paymentRouter.js";
@@ -22,12 +23,9 @@ const port = process.env.PORT || 5000;
 
 app.use(
   cors({
-    origin: [
-      "http://localhost:3000",
-      "https://nexorosolution.com",
-    ],
+    origin: ["http://localhost:3000", "https://nexorosolution.com"],
     credentials: true,
-  })
+  }),
 );
 app.use(express.json());
 
@@ -43,6 +41,7 @@ app.use("/plans", planRouter);
 app.use("/blogs", blogRouter);
 app.use("/portfolio", portfolioRouter);
 app.use("/category", categoryRouter);
+app.use("/subServices", subServiceRouter);
 app.use("/cart", cartRouter);
 app.use("/orders", orderRouter);
 app.use("/payment", paymentRouter);

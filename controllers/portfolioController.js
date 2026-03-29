@@ -5,13 +5,19 @@ import cloudinary from "../config/cloudinary.js";
 const portfolioCollection = client.db("nexoro").collection("Portfolios");
 await portfolioCollection.createIndex({ slug: 1 }, { unique: true });
 
-// Create a new blog post
+// Create a new Portfolio post
 export const createPortfolio = async (req, res) => {
-  const { title, content, author, service, description, visibility, carousel } = req.body;
-  const slug = title.toString().toLowerCase().trim().replace(/[\s\W-]+/g, "-");
+  const { title, content, author, service, subService, visibility, carousel } =
+    req.body;
+  const slug = title
+    .toString()
+    .toLowerCase()
+    .trim()
+    .replace(/[\s\W-]+/g, "-");
   const visible = visibility === "true";
   const homepage = carousel === "true";
   const serviceId = new ObjectId(service);
+  const subServiceId = new ObjectId(subService);
   const { filename, path } = req.file;
   const added = new Date();
   try {
@@ -22,6 +28,7 @@ export const createPortfolio = async (req, res) => {
       author,
       carousel: homepage,
       serviceId,
+      subServiceId,
       description,
       visibility: visible,
       image: path,
@@ -50,23 +57,38 @@ export const getAllPortfolios = async (req, res) => {
 
   const totalPortfolios = await portfolioCollection.countDocuments();
 
-  const portfolios = await portfolioCollection.aggregate([
-    { $match: filter },
-    {
-      $lookup: {
-        from: "Services",
-        localField: "serviceId",
-        foreignField: "_id",
-        as: "service",
+  const portfolios = await portfolioCollection
+    .aggregate([
+      { $match: filter },
+      {
+        $lookup: {
+          from: "Services",
+          localField: "serviceId",
+          foreignField: "_id",
+          as: "service",
+        },
       },
-    },
-    {
-      $unwind: "$service",
-    },
-    { $sort: { added: -1 } },
-    { $skip: skip },
-    { $limit: limit },
-  ])
+      {
+        $lookup: {
+          from: "SubServices",
+          localField: "subServiceId",
+          foreignField: "_id",
+          as: "subService",
+        },
+      },
+      {
+        $unwind: "$service",
+      },
+      {
+        $unwind: {
+          path: "$subService",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      { $sort: { added: -1 } },
+      { $skip: skip },
+      { $limit: limit },
+    ])
     .toArray();
   res.send({
     portfolios,
@@ -82,29 +104,31 @@ export const getAllPortfolios = async (req, res) => {
 
 export const getPortfolioServices = async (req, res) => {
   try {
-    const allServices = await portfolioCollection.aggregate([
-      {
-        $lookup: {
-          from: "Services",
-          localField: "serviceId",
-          foreignField: "_id",
-          as: "service",
+    const allServices = await portfolioCollection
+      .aggregate([
+        {
+          $lookup: {
+            from: "Services",
+            localField: "serviceId",
+            foreignField: "_id",
+            as: "service",
+          },
         },
-      },
-      { $unwind: "$service" },
-      {
-        $group: {
-          _id: "$service._id",
-          serviceTitle: { $first: "$service.title" },
+        { $unwind: "$service" },
+        {
+          $group: {
+            _id: "$service._id",
+            serviceTitle: { $first: "$service.title" },
+          },
         },
-      },
-      {
-        $project: {
-          _id: 1,
-          serviceTitle: 1,
+        {
+          $project: {
+            _id: 1,
+            serviceTitle: 1,
+          },
         },
-      },
-    ]).toArray();
+      ])
+      .toArray();
 
     res.status(200).json({ allServices });
   } catch (error) {
@@ -131,12 +155,29 @@ export const getPortfolio = async (req, res) => {
           },
         },
         {
+          $lookup: {
+            from: "SubServices",
+            localField: "subServiceId",
+            foreignField: "_id",
+            as: "subService",
+          },
+        },
+        {
           $unwind: "$service",
+        },
+        {
+          $unwind: "$subService",
         },
         {
           $replaceRoot: {
             newRoot: {
-              $mergeObjects: ["$$ROOT", { service: "$service.title" }],
+              $mergeObjects: [
+                "$$ROOT",
+                {
+                  service: "$service.title",
+                  subService: "$subService.subService",
+                },
+              ],
             },
           },
         },
@@ -161,7 +202,9 @@ export const deleteAPortfolio = async (req, res) => {
   const id = req.params.id;
 
   try {
-    const result = await portfolioCollection.deleteOne({ _id: new ObjectId(id) });
+    const result = await portfolioCollection.deleteOne({
+      _id: new ObjectId(id),
+    });
     if (result.deletedCount > 0) {
       return res.send({
         success: true,
@@ -182,11 +225,20 @@ export const deleteAPortfolio = async (req, res) => {
 
 export const updatePortfolio = async (req, res) => {
   const id = req.params.id;
-  const { title, content, author, carousel, category, description, visibility } =
-    req.body;
+  const {
+    title,
+    content,
+    author,
+    carousel,
+    subService,
+    category,
+    description,
+    visibility,
+  } = req.body;
   const visible = visibility === "true";
   const homepage = carousel === "true";
   const categoryId = new ObjectId(category);
+  const subServiceId = new ObjectId(subService);
   try {
     const existingPortfolio = await portfolioCollection.findOne({
       _id: new ObjectId(id),
@@ -202,6 +254,8 @@ export const updatePortfolio = async (req, res) => {
       carousel: homepage,
       description,
       categoryId,
+      subServiceId,
+
       visibility: visible,
       updatedOn: new Date(),
     };
@@ -217,13 +271,15 @@ export const updatePortfolio = async (req, res) => {
     }
     await portfolioCollection.updateOne(
       { _id: new ObjectId(id) },
-      { $set: updatedPortfolio }
+      { $set: updatedPortfolio },
     );
     res
       .status(200)
       .json({ success: true, message: "Portfolio Updated Successfully" });
   } catch (error) {
     console.error("Update Portfolio error:", error);
-    res.status(500).json({ success: false, message: "Failed to Update Portfolio" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to Update Portfolio" });
   }
 };
