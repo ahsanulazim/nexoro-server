@@ -50,6 +50,11 @@ export const handlePayment = async (req, res) => {
 
     const xHash = generateHash(merchantTransactionId, process.env.EPS_HASH_KEY);
 
+    const currencyRes = await fetch(`${process.env.EXCHANGE_RATE_API_URL}`);
+
+    const currencyData = await currencyRes.json();
+    const currencyRate = Math.round(currencyData.conversion_rates.BDT);
+
     const response = await fetch(
       `${process.env.EPS_URL}/EPSEngine/InitializeEPS`,
       {
@@ -65,7 +70,7 @@ export const handlePayment = async (req, res) => {
           CustomerOrderId: orderId,
           merchantTransactionId,
           transactionTypeId: 1,
-          totalAmount: planDetails.price,
+          totalAmount: planDetails.price * currencyRate,
           successUrl: `${process.env.FRONTEND_URL}/payment-successful`,
           failUrl: `${process.env.FRONTEND_URL}/payment-failed`,
           cancelUrl: `${process.env.FRONTEND_URL}/payment-cancelled`,
