@@ -6,35 +6,111 @@ const portfolioCollection = client.db("nexoro").collection("Portfolios");
 await portfolioCollection.createIndex({ slug: 1 }, { unique: true });
 
 // Create a new Portfolio post
+// export const createPortfolio = async (req, res) => {
+//   const { title, content, author, service, subService, visibility, carousel } =
+//     req.body;
+//   const slug = title
+//     .toString()
+//     .toLowerCase()
+//     .trim()
+//     .replace(/[\s\W-]+/g, "-");
+//   const visible = visibility === "true";
+//   const homepage = carousel === "true";
+//   const serviceId = new ObjectId(service);
+
+//   let subServiceId = null;
+//   if (subService) {
+//     subServiceId = new ObjectId(subService);
+//   }
+
+//   const { filename, path } = req.file;
+//   const added = new Date();
+//   try {
+//     await portfolioCollection.insertOne({
+//       title,
+//       slug,
+//       content,
+//       author,
+//       carousel: homepage,
+//       serviceId,
+//       subServiceId,
+//       description,
+//       visibility: visible,
+//       image: path,
+//       public_id: filename,
+//       added,
+//     });
+//     res.status(200).json({ success: true });
+//   } catch (error) {
+//     if (error.code === 11000) {
+//       return res
+//         .status(400)
+//         .send({ success: false, message: "Portfolio already exists" });
+//     }
+//     res
+//       .status(500)
+//       .send({ success: false, message: "Failed to create portfolio" });
+//   }
+// };
+
 export const createPortfolio = async (req, res) => {
-  const { title, content, author, service, subService, visibility, carousel } =
-    req.body;
+  const {
+    title,
+    content,
+    author,
+    service,
+    subService,
+    visibility,
+    carousel,
+    description,
+  } = req.body;
+
   const slug = title
     .toString()
     .toLowerCase()
     .trim()
     .replace(/[\s\W-]+/g, "-");
+
   const visible = visibility === "true";
   const homepage = carousel === "true";
+
+  // Validate service ID
+  if (!ObjectId.isValid(service)) {
+    return res.status(400).json({ error: "Invalid service ID" });
+  }
   const serviceId = new ObjectId(service);
-  const subServiceId = new ObjectId(subService);
+
+  // Handle optional subService
+  let subServiceId;
+  if (subService && ObjectId.isValid(subService)) {
+    subServiceId = new ObjectId(subService);
+  }
+
   const { filename, path } = req.file;
   const added = new Date();
+
   try {
-    await portfolioCollection.insertOne({
+    const portfolioDoc = {
       title,
       slug,
       content,
       author,
       carousel: homepage,
       serviceId,
-      subServiceId,
       description,
       visibility: visible,
       image: path,
       public_id: filename,
       added,
-    });
+    };
+
+    // Only add subServiceId if it exists
+    if (subServiceId) {
+      portfolioDoc.subServiceId = subServiceId;
+    }
+
+    await portfolioCollection.insertOne(portfolioDoc);
+
     res.status(200).json({ success: true });
   } catch (error) {
     if (error.code === 11000) {
@@ -235,14 +311,27 @@ export const updatePortfolio = async (req, res) => {
     description,
     visibility,
   } = req.body;
+
   const visible = visibility === "true";
   const homepage = carousel === "true";
+
+  // Validate category ID
+  if (!ObjectId.isValid(category)) {
+    return res.status(400).json({ error: "Invalid category ID" });
+  }
   const categoryId = new ObjectId(category);
-  const subServiceId = new ObjectId(subService);
+
+  // Handle optional subService
+  let subServiceId;
+  if (subService && ObjectId.isValid(subService)) {
+    subServiceId = new ObjectId(subService);
+  }
+
   try {
     const existingPortfolio = await portfolioCollection.findOne({
       _id: new ObjectId(id),
     });
+
     if (!existingPortfolio) {
       return res.status(404).json({ message: "Portfolio not found" });
     }
@@ -254,11 +343,14 @@ export const updatePortfolio = async (req, res) => {
       carousel: homepage,
       description,
       categoryId,
-      subServiceId,
-
       visibility: visible,
       updatedOn: new Date(),
     };
+
+    // Only add subServiceId if provided
+    if (subServiceId) {
+      updatedPortfolio.subServiceId = subServiceId;
+    }
 
     if (req.file) {
       if (existingPortfolio.public_id) {
@@ -269,10 +361,12 @@ export const updatePortfolio = async (req, res) => {
     } else {
       updatedPortfolio.image = existingPortfolio.image;
     }
+
     await portfolioCollection.updateOne(
       { _id: new ObjectId(id) },
       { $set: updatedPortfolio },
     );
+
     res
       .status(200)
       .json({ success: true, message: "Portfolio Updated Successfully" });

@@ -5,13 +5,14 @@ import {
   getOrder,
   updateOrderStatus,
 } from "../controllers/orderController.js";
-import { verifyAdmin } from "../middleware/verifyAdmin.js";
+
 import { verifyId } from "../middleware/verifyId.js";
+import { verifyAdminOrMember } from "../middleware/verifyAdminOrMember.js";
 
 const router = express.Router();
 
 //Routes
-router.get("/getAllOrders", verifyId, verifyAdmin, getAllOrders);
+router.get("/getAllOrders", verifyId, verifyAdminOrMember, getAllOrders);
 router.get("/getOrder/:orderId", getOrder);
 router.put("/updateOrder/:orderId", updateOrderStatus);
 router.delete("/deleteOrder/:orderId", deleteOrder);

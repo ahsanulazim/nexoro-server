@@ -64,15 +64,9 @@ export const getAllOrders = async (req, res) => {
     const enrichedOrders = await Promise.all(
       orders.map(async (order) => {
         // Firebase থেকে user info
-        let userName = null;
-        try {
-          const userRecord = await admin.auth().getUser(order.uid);
-          userName = userRecord.displayName;
-        } catch (err) {
-          console.error("Firebase user fetch error:", err);
-        }
+        let userName = order.paymentData?.CustomerName || "Unknown User";
         let serviceTitle = order.service;
-        let planName = order.planId;
+        let planName = null;
         let planPrice = null;
 
         // Service info
@@ -82,7 +76,7 @@ export const getAllOrders = async (req, res) => {
         if (service) {
           serviceTitle = service.title;
           const plan = service.plans.find(
-            (p) => p.id.toString() === order.planId,
+            (p) => p.id.toString() === order.planId?.toString(),
           );
           planName = plan.planName;
           planPrice = plan.price;
