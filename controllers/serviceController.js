@@ -85,7 +85,7 @@ export const deleteServices = async (req, res) => {
     if (!service) {
       return res.send({
         success: false,
-        message: "Service not found in MongoDB",
+        message: "Service not found!",
       });
     }
 

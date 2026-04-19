@@ -5,54 +5,6 @@ import cloudinary from "../config/cloudinary.js";
 const portfolioCollection = client.db("nexoro").collection("Portfolios");
 await portfolioCollection.createIndex({ slug: 1 }, { unique: true });
 
-// Create a new Portfolio post
-// export const createPortfolio = async (req, res) => {
-//   const { title, content, author, service, subService, visibility, carousel } =
-//     req.body;
-//   const slug = title
-//     .toString()
-//     .toLowerCase()
-//     .trim()
-//     .replace(/[\s\W-]+/g, "-");
-//   const visible = visibility === "true";
-//   const homepage = carousel === "true";
-//   const serviceId = new ObjectId(service);
-
-//   let subServiceId = null;
-//   if (subService) {
-//     subServiceId = new ObjectId(subService);
-//   }
-
-//   const { filename, path } = req.file;
-//   const added = new Date();
-//   try {
-//     await portfolioCollection.insertOne({
-//       title,
-//       slug,
-//       content,
-//       author,
-//       carousel: homepage,
-//       serviceId,
-//       subServiceId,
-//       description,
-//       visibility: visible,
-//       image: path,
-//       public_id: filename,
-//       added,
-//     });
-//     res.status(200).json({ success: true });
-//   } catch (error) {
-//     if (error.code === 11000) {
-//       return res
-//         .status(400)
-//         .send({ success: false, message: "Portfolio already exists" });
-//     }
-//     res
-//       .status(500)
-//       .send({ success: false, message: "Failed to create portfolio" });
-//   }
-// };
-
 export const createPortfolio = async (req, res) => {
   const {
     title,
