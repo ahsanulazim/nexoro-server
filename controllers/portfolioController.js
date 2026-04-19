@@ -242,7 +242,10 @@ export const getPortfolio = async (req, res) => {
           $unwind: "$service",
         },
         {
-          $unwind: "$subService",
+          $unwind: {
+            path: "$subService",
+            preserveNullAndEmptyArrays: true,
+          },
         },
         {
           $replaceRoot: {
@@ -260,7 +263,7 @@ export const getPortfolio = async (req, res) => {
       ])
       .toArray();
 
-    if (portfolio) {
+    if (portfolio && portfolio.length > 0) {
       return res.status(200).json(portfolio[0]);
     } else {
       return res

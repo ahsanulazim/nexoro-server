@@ -8,15 +8,28 @@ import {
   getService,
   updateService,
 } from "../controllers/serviceController.js";
-import { deleteFromCloudinary } from "../middleware/deleteCloudinary.js";
 
 const router = express.Router();
 
 //Routes
-router.post("/", upload.single("icon"), createService);
+router.post(
+  "/",
+  upload.fields([
+    { name: "icon", maxCount: 1 },
+    { name: "coverImage", maxCount: 1 },
+  ]),
+  createService
+);
 router.get("/", getAllServices);
 router.get("/:slug", getService);
-router.delete("/:slug", deleteFromCloudinary, deleteServices);
-router.put("/:id", upload.single("icon"), updateService);
+router.delete("/:slug", deleteServices);
+router.put(
+  "/:id",
+  upload.fields([
+    { name: "icon", maxCount: 1 },
+    { name: "coverImage", maxCount: 1 },
+  ]),
+  updateService
+);
 
 export default router;
