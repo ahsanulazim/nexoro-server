@@ -141,8 +141,8 @@ export const updateService = async (req, res) => {
     };
 
     // Handle SVG icon file
-    if (req.files?.svgIcon) {
-      if (existingService.svg_icon_public_id) {
+    if (req.files?.icon) {
+      if (existingService.icon_public_id) {
         await cloudinary.uploader.destroy(existingService.icon_public_id);
       }
       updatedService.icon = req.files.icon[0].path;
