@@ -6,6 +6,7 @@ import {
   deleteServices,
   getAllServices,
   getService,
+  updateFavourite,
   updateService,
 } from "../controllers/serviceController.js";
 
@@ -18,18 +19,19 @@ router.post(
     { name: "icon", maxCount: 1 },
     { name: "coverImage", maxCount: 1 },
   ]),
-  createService
+  createService,
 );
 router.get("/", getAllServices);
 router.get("/:slug", getService);
 router.delete("/:slug", deleteServices);
 router.put(
-  "/:id",
+  "/updateService/:id",
   upload.fields([
     { name: "icon", maxCount: 1 },
     { name: "coverImage", maxCount: 1 },
   ]),
-  updateService
+  updateService,
 );
+router.put("/favourite", updateFavourite);
 
 export default router;

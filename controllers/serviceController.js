@@ -14,6 +14,9 @@ export const createService = async (req, res) => {
     .trim()
     .replace(/[\s\W-]+/g, "-");
   const added = new Date();
+
+  const favourite = false;
+
   try {
     const serviceData = {
       title,
@@ -21,6 +24,7 @@ export const createService = async (req, res) => {
       shortDes,
       longDes,
       added,
+      favourite,
     };
 
     // Handle SVG icon file
@@ -52,7 +56,13 @@ export const createService = async (req, res) => {
 
 // Get all Services
 export const getAllServices = async (req, res) => {
-  const services = await serviceCollection.find().toArray();
+  const services = await serviceCollection
+    .find()
+    .sort({
+      favourite: -1,
+      added: -1,
+    })
+    .toArray();
   res.send(services);
 };
 
@@ -179,5 +189,43 @@ export const updateService = async (req, res) => {
     res
       .status(500)
       .json({ success: false, message: "Failed to update service" });
+  }
+};
+
+// update favourite
+export const updateFavourite = async (req, res) => {
+  const slug = req.query.slug;
+
+  if (!slug) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Slug is required" });
+  }
+
+  try {
+    const service = await serviceCollection.findOne({ slug });
+
+    if (!service) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Service not found" });
+    }
+
+    const newFavourite =
+      service.favourite === undefined ? true : !service.favourite;
+
+    const updated = await serviceCollection.updateOne(
+      { slug },
+      { $set: { favourite: newFavourite } },
+    );
+
+    return res.json({
+      success: true,
+      message: "Favourite updated successfully",
+    });
+  } catch (error) {
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to update favourite" });
   }
 };
