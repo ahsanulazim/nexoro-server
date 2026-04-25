@@ -256,25 +256,25 @@ export const deleteAPortfolio = async (req, res) => {
 
 export const updatePortfolio = async (req, res) => {
   const id = req.params.id;
+
   const {
     title,
     content,
     author,
     carousel,
     subService,
-    category,
     description,
     visibility,
   } = req.body;
 
+  const slug = title
+    .toString()
+    .toLowerCase()
+    .trim()
+    .replace(/[\s\W-]+/g, "-");
+
   const visible = visibility === "true";
   const homepage = carousel === "true";
-
-  // Validate category ID
-  if (!ObjectId.isValid(category)) {
-    return res.status(400).json({ error: "Invalid category ID" });
-  }
-  const categoryId = new ObjectId(category);
 
   // Handle optional subService
   let subServiceId;
@@ -293,11 +293,11 @@ export const updatePortfolio = async (req, res) => {
 
     const updatedPortfolio = {
       title,
+      slug,
       content,
       author,
       carousel: homepage,
       description,
-      categoryId,
       visibility: visible,
       updatedOn: new Date(),
     };

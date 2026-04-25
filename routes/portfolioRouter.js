@@ -18,6 +18,6 @@ router.get("/allPortfolios", getAllPortfolios);
 router.get("/categories", getPortfolioServices);
 router.get("/:slug", getPortfolio);
 router.delete("/:id", deleteFromCloudinary, deleteAPortfolio);
-router.put("/:id", upload.single("image"), updatePortfolio);
+router.put("/updatePortfolio/:id", upload.single("image"), updatePortfolio);
 
 export default router;
