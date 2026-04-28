@@ -332,3 +332,49 @@ export const updatePortfolio = async (req, res) => {
       .json({ success: false, message: "Failed to Update Portfolio" });
   }
 };
+
+export const getCarouselPortfolios = async (req, res) => {
+  try {
+    const carouselPortfolios = await portfolioCollection
+      .aggregate([
+        { $match: { carousel: true, visibility: true } },
+        {
+          $lookup: {
+            from: "Services",
+            localField: "serviceId",
+            foreignField: "_id",
+            as: "service",
+          },
+        },
+        { $unwind: "$service" },
+        {
+          $lookup: {
+            from: "SubServices",
+            localField: "subServiceId",
+            foreignField: "_id",
+            as: "subService",
+          },
+        },
+        {
+          $unwind: { path: "$subService", preserveNullAndEmptyArrays: true },
+        },
+        {
+          $project: {
+            title: 1,
+            slug: 1,
+            image: 1,
+            serviceTitle: "$service.title",
+            subServiceTitle: "$subService.title",
+            added: 1,
+          },
+        },
+      ])
+      .toArray();
+    res.status(200).json({ carouselPortfolios });
+  } catch (error) {
+    console.error("Error fetching carousel portfolios:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch carousel portfolios" });
+  }
+};

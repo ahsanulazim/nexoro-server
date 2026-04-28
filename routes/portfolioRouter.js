@@ -3,6 +3,7 @@ import {
   createPortfolio,
   deleteAPortfolio,
   getAllPortfolios,
+  getCarouselPortfolios,
   getPortfolio,
   getPortfolioServices,
   updatePortfolio,
@@ -17,6 +18,7 @@ router.post("/portfolioImages", upload.array("images"));
 router.get("/allPortfolios", getAllPortfolios);
 router.get("/categories", getPortfolioServices);
 router.get("/:slug", getPortfolio);
+router.get("/getportfolio/carousel", getCarouselPortfolios);
 router.delete("/:id", deleteFromCloudinary, deleteAPortfolio);
 router.put("/updatePortfolio/:id", upload.single("image"), updatePortfolio);
 
