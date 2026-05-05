@@ -1,6 +1,7 @@
 import { ObjectId } from "mongodb";
 import client from "../config/db.js";
 import cloudinary from "../config/cloudinary.js";
+import { imageOptimizer } from "../utils/imageOptimizer.js";
 
 const serviceCollection = client.db("nexoro").collection("Services");
 await serviceCollection.createIndex({ slug: 1 }, { unique: true });
@@ -63,7 +64,13 @@ export const getAllServices = async (req, res) => {
       added: -1,
     })
     .toArray();
-  res.send(services);
+
+  const optimizedServices = services.map((service) => ({
+    ...service,
+    coverImage: imageOptimizer(service.coverImage, 800, 800),
+  }));
+
+  res.send(optimizedServices);
 };
 
 // Get a Service

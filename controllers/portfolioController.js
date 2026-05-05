@@ -1,6 +1,7 @@
 import { ObjectId } from "mongodb";
 import client from "../config/db.js";
 import cloudinary from "../config/cloudinary.js";
+import { imageOptimizer } from "../utils/imageOptimizer.js";
 
 const portfolioCollection = client.db("nexoro").collection("Portfolios");
 await portfolioCollection.createIndex({ slug: 1 }, { unique: true });
@@ -118,8 +119,14 @@ export const getAllPortfolios = async (req, res) => {
       { $limit: limit },
     ])
     .toArray();
+
+  const optimizedPortfolios = portfolios.map((portfolio) => ({
+    ...portfolio,
+    image: imageOptimizer(portfolio.image, 700, 467),
+  }));
+
   res.send({
-    portfolios,
+    portfolios: optimizedPortfolios,
     totalPortfolios,
     totalPages: Math.ceil(totalPortfolios / limit),
     currentPage: page,
@@ -370,7 +377,13 @@ export const getCarouselPortfolios = async (req, res) => {
         },
       ])
       .toArray();
-    res.status(200).json({ carouselPortfolios });
+
+    const optimizedPortfolios = carouselPortfolios.map((portfolio) => ({
+      ...portfolio,
+      image: imageOptimizer(portfolio.image),
+    }));
+
+    res.status(200).json({ carouselPortfolios: optimizedPortfolios });
   } catch (error) {
     console.error("Error fetching carousel portfolios:", error);
     res

@@ -1,6 +1,7 @@
 import { ObjectId } from "mongodb";
 import client from "../config/db.js";
 import cloudinary from "../config/cloudinary.js";
+import { imageOptimizer } from "../utils/imageOptimizer.js";
 
 const blogCollection = client.db("nexoro").collection("Blogs");
 await blogCollection.createIndex({ slug: 1 }, { unique: true });
@@ -9,7 +10,11 @@ await blogCollection.createIndex({ slug: 1 }, { unique: true });
 export const createBlog = async (req, res) => {
   const { title, content, author, category, description, visibility } =
     req.body;
-  const slug = title.toString().toLowerCase().trim().replace(/[\s\W-]+/g, "-");
+  const slug = title
+    .toString()
+    .toLowerCase()
+    .trim()
+    .replace(/[\s\W-]+/g, "-");
   const visible = visibility === "true";
   const categoryId = new ObjectId(category);
   const { filename, path } = req.file;
@@ -65,8 +70,14 @@ export const getAllBlogs = async (req, res) => {
       { $limit: limit },
     ])
     .toArray();
+
+  const optimizedBlogs = blogs.map((blog) => ({
+    ...blog,
+    image: imageOptimizer(blog.image, 800, 800),
+  }));
+
   res.send({
-    blogs,
+    blogs: optimizedBlogs,
     totalBlogs,
     totalPages: Math.ceil(totalBlogs / limit),
     currentPage: page,
@@ -122,19 +133,21 @@ export const getBlog = async (req, res) => {
 
 export const getLatestBlogs = async (req, res) => {
   try {
-    const latestBlogs = await blogCollection.aggregate([
-      {
-        $lookup: {
-          from: "Categories",
-          localField: "categoryId",
-          foreignField: "_id",
-          as: "category",
+    const latestBlogs = await blogCollection
+      .aggregate([
+        {
+          $lookup: {
+            from: "Categories",
+            localField: "categoryId",
+            foreignField: "_id",
+            as: "category",
+          },
         },
-      },
-      { $unwind: "$category" },
-      { $sort: { added: -1 } },
-      { $limit: 6 },
-    ]).toArray();
+        { $unwind: "$category" },
+        { $sort: { added: -1 } },
+        { $limit: 6 },
+      ])
+      .toArray();
     res.status(200).json(latestBlogs);
   } catch (error) {
     res
@@ -202,7 +215,7 @@ export const updateBlog = async (req, res) => {
     }
     await blogCollection.updateOne(
       { _id: new ObjectId(id) },
-      { $set: updatedBlog }
+      { $set: updatedBlog },
     );
     res
       .status(200)
