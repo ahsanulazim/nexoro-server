@@ -7,12 +7,13 @@ await clientCollection.createIndex({ email: 1 }, { unique: true });
 
 //create new client
 export const createClient = async (req, res) => {
-  const { client, company, role, email, phone, country } = req.body;
-  const { filename, path } = req.file;
+  const { name, company, role, email, phone, country } = req.body;
+  const { filename, path } = req.file || {};
   const joined = new Date();
+
   try {
     await clientCollection.insertOne({
-      client,
+      name,
       company,
       role,
       email,
@@ -71,7 +72,7 @@ export const deleteClient = async (req, res) => {
 export const updateClient = async (req, res) => {
   try {
     const id = req.params.id;
-    const { client, company, role, email, phone, country, slider } = req.body;
+    const { name, company, role, email, phone, country, slider } = req.body;
     const existingClient = await clientCollection.findOne({
       _id: new ObjectId(id),
     });
@@ -80,13 +81,14 @@ export const updateClient = async (req, res) => {
       return res.status(404).json({ message: "Client not found" });
     }
     const updatedClient = {
-      client,
+      name,
       company,
       role,
       email,
       phone,
       country,
-      slider
+      slider,
+      updatedAt: new Date(),
     };
 
     if (req.file) {
@@ -101,7 +103,7 @@ export const updateClient = async (req, res) => {
 
     await clientCollection.updateOne(
       { _id: new ObjectId(id) },
-      { $set: updatedClient }
+      { $set: updatedClient },
     );
     res
       .status(200)

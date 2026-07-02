@@ -5,6 +5,8 @@ import client from "../config/db.js";
 const orderCollection = client.db("nexoro").collection("Orders");
 const orderCounterCollection = client.db("nexoro").collection("Counters");
 const serviceCollection = client.db("nexoro").collection("Services");
+const countriesCollection = client.db("nexoro").collection("Countries");
+const clientCollection = client.db("nexoro").collection("Clients");
 
 // Helper: Generate unique orderId using counters collection
 export const getNextOrderId = async () => {
@@ -19,19 +21,65 @@ export const getNextOrderId = async () => {
 };
 
 //create order
+
 export const createOrder = async (req, res) => {
+  const { clientId, slug, planId, discount, payment, paymentMethod, amount } =
+    req.body;
+
+  try {
+    const orderId = await getNextOrderId();
+    const serviceData = await serviceCollection.findOne({ slug });
+    const planData = serviceData?.plans.find(
+      (plan) => plan.id.toString() === planId,
+    );
+
+    const order = await orderCollection.insertOne({
+      clientId,
+      orderId,
+      service: slug,
+      planId,
+      price: Number(planData?.price),
+      discount,
+      status: "Pending",
+      createdBy: "Admin",
+      amount,
+      payment,
+      paymentMethod,
+      createdAt: new Date(),
+    });
+    res.status(200).send({ success: true, order });
+  } catch (error) {
+    console.error("Order error:", error);
+    return res
+      .status(500)
+      .send({ success: false, message: "Failed to create order" });
+  }
+};
+
+export const confirmOrder = async (req, res) => {
   const { uid, slug, planId } = req.query;
 
   try {
     const orderId = await getNextOrderId();
+
+    const service = await serviceCollection.findOne({
+      slug,
+    });
+
+    const plan = service?.plans.find((plan) => plan.id.toString() === planId);
 
     const order = await orderCollection.insertOne({
       uid,
       orderId,
       service: slug,
       planId,
+      price: Number(plan?.price),
       status: "Pending",
-      paymentData: req.paymentData || null,
+      createdBy: "User",
+      payment: req.paymentData.Status || "Pending",
+      paymentMethod: req.paymentData.FinancialEntity,
+      amount: Number(plan?.price),
+      epsData: req.paymentData || null,
       createdAt: new Date(),
     });
     res.status(200).send({ success: true, orderId: order.insertedId });
@@ -64,7 +112,20 @@ export const getAllOrders = async (req, res) => {
     const enrichedOrders = await Promise.all(
       orders.map(async (order) => {
         // Firebase থেকে user info
-        let userName = order.paymentData?.CustomerName || "Unknown User";
+        let userRecord = null;
+        if (order.uid) {
+          userRecord = await admin.auth().getUser(order.uid);
+        } else if (order.clientId) {
+          const client = await clientCollection.findOne({
+            _id: new ObjectId(order.clientId),
+          });
+          userRecord = { name: client?.name, email: client?.email };
+        }
+        let userName =
+          userRecord?.displayName ||
+          userRecord.name ||
+          order.epsData?.CustomerName ||
+          "Unknown User";
         let serviceTitle = order.service;
         let planName = null;
         let planPrice = null;
@@ -85,10 +146,15 @@ export const getAllOrders = async (req, res) => {
         return {
           orderId: order._id.toString(),
           orderUid: order.orderId,
-          userName,
+          userName: userName || order.epsData.customerName || order.clientName,
           serviceTitle,
           planName,
-          planPrice,
+          price: planPrice,
+          amount: order.amount,
+          dueAmount: planPrice - order.amount,
+          createdBy: order.createdBy,
+          payment: order.payment,
+          paymentMethod: order.paymentMethod,
           status: order.status || "Pending",
           createdAt: order.createdAt,
         };
@@ -115,17 +181,26 @@ export const getAllOrders = async (req, res) => {
 
 //get order by id
 export const getOrder = async (req, res) => {
-  const { orderId } = req.params;
+  const { id } = req.query;
 
   try {
-    const order = await orderCollection.findOne({ _id: new ObjectId(orderId) });
+    const order = await orderCollection.findOne({ _id: new ObjectId(id) });
     if (!order) {
       return res
         .status(404)
         .json({ success: false, message: "Order not found" });
     }
-    const userRecord = await admin.auth().getUser(order.uid);
-    const user = { name: userRecord.displayName, email: userRecord.email };
+
+    let user = {};
+    if (order.uid) {
+      const userRecord = await admin.auth().getUser(order.uid);
+      user = { name: userRecord.displayName, email: userRecord.email };
+    } else {
+      const client = await clientCollection.findOne({
+        _id: new ObjectId(order.clientId),
+      });
+      user = { name: client.name, email: client.email };
+    }
     const service = await serviceCollection.findOne({ slug: order.service });
     const plan = service
       ? service.plans.find((p) => p.id.toString() === order.planId)
@@ -180,5 +255,25 @@ export const deleteOrder = async (req, res) => {
   } catch (error) {
     console.error("Delete order error:", error);
     res.status(500).json({ success: false, message: "Failed to delete order" });
+  }
+};
+
+export const getAllCountries = async (req, res) => {
+  try {
+    const countries = await countriesCollection.find({}).toArray();
+
+    const formattedCountries = countries.map((country) => {
+      return {
+        value: country.countryCode,
+        label: country.name,
+      };
+    });
+
+    res.status(200).json({ success: true, countries: formattedCountries });
+  } catch (error) {
+    console.error("Get countries error:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch countries" });
   }
 };
