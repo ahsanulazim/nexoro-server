@@ -42,7 +42,7 @@ export const createOrder = async (req, res) => {
       discount,
       status: "Pending",
       createdBy: "Admin",
-      amount,
+      amount: payment === "Success" ? Number(planData?.price) : amount,
       payment,
       paymentMethod,
       createdAt: new Date(),
@@ -211,6 +211,57 @@ export const getOrder = async (req, res) => {
   } catch (error) {
     console.error("Get order error:", error);
     res.status(500).json({ success: false, message: "Failed to fetch order" });
+  }
+};
+
+//update order
+export const updateOrder = async (req, res) => {
+  const { orderId } = req.query;
+  const {
+    uid,
+    clientId,
+    slug,
+    planId,
+    status,
+    amount,
+    payment,
+    paymentMethod,
+  } = req.body;
+
+  console.log(req.body);
+
+  try {
+    const order = await orderCollection.findOne({ _id: new ObjectId(orderId) });
+    if (!order) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
+    }
+    const result = await orderCollection.updateOne(
+      { _id: new ObjectId(orderId) },
+      {
+        $set: {
+          uid,
+          clientId,
+          service: slug,
+          planId,
+          status,
+          amount,
+          payment,
+          paymentMethod,
+        },
+      },
+    );
+    if (result.modifiedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found or status unchanged",
+      });
+    }
+    res.status(200).json({ success: true, message: "Order updated" });
+  } catch (error) {
+    console.error("Update order error:", error);
+    res.status(500).json({ success: false, message: "Failed to update order" });
   }
 };
 

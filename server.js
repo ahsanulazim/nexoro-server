@@ -17,6 +17,7 @@ import cartRouter from "./routes/cartRouter.js";
 import orderRouter from "./routes/orderRouter.js";
 import paymentRouter from "./routes/paymentRouter.js";
 import dashboardRouter from "./routes/dashboardRouter.js";
+import chartRouter from "./routes/chartRouter.js";
 
 dotenv.config();
 const app = express();
@@ -47,6 +48,7 @@ app.use("/cart", cartRouter);
 app.use("/orders", orderRouter);
 app.use("/payment", paymentRouter);
 app.use("/dashboard", dashboardRouter);
+app.use("/analytics", chartRouter);
 
 app.get("/", (req, res) => res.send("Hello World!"));
 
