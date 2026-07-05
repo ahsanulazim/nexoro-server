@@ -1,0 +1,14 @@
+{
+    "DEPLOYPATH": "/home/nexoroso/server",
+    "task": {
+        "0": "admin",
+        "1": "config",
+        "2": "controllers",
+        "3": "middleware",
+        "4": "routes",
+        "5": "utils",
+        "6": "package.json",
+        "7": "package-lock.json",
+        "8": "server.js"
+    }
+}

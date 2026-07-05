@@ -7,6 +7,7 @@ const orderCounterCollection = client.db("nexoro").collection("Counters");
 const serviceCollection = client.db("nexoro").collection("Services");
 const countriesCollection = client.db("nexoro").collection("Countries");
 const clientCollection = client.db("nexoro").collection("Clients");
+const teamCollection = client.db("nexoro").collection("Team");
 
 // Helper: Generate unique orderId using counters collection
 export const getNextOrderId = async () => {
@@ -42,6 +43,7 @@ export const createOrder = async (req, res) => {
       discount,
       status: "Pending",
       createdBy: "Admin",
+      assignedTo: null,
       amount: payment === "Success" ? Number(planData?.price) : amount,
       payment,
       paymentMethod,
@@ -76,6 +78,7 @@ export const confirmOrder = async (req, res) => {
       price: Number(plan?.price),
       status: "Pending",
       createdBy: "User",
+      assignedTo: null,
       payment: req.paymentData.Status || "Pending",
       paymentMethod: req.paymentData.FinancialEntity,
       amount: Number(plan?.price),
@@ -143,6 +146,14 @@ export const getAllOrders = async (req, res) => {
           planPrice = plan.price;
         }
 
+        //assigned member
+        let member = null;
+        if (order.assignedTo) {
+          member = await teamCollection.findOne({
+            _id: new ObjectId(order.assignedTo),
+          });
+        }
+
         return {
           orderId: order._id.toString(),
           orderUid: order.orderId,
@@ -151,7 +162,9 @@ export const getAllOrders = async (req, res) => {
           planName,
           price: planPrice,
           amount: order.amount,
-          dueAmount: planPrice - order.amount,
+          dueAmount: planPrice - order.discount - order.amount,
+          assignedTo: order.assignedTo,
+          assignedMember: member?.memberName || null,
           createdBy: order.createdBy,
           payment: order.payment,
           paymentMethod: order.paymentMethod,
@@ -205,9 +218,24 @@ export const getOrder = async (req, res) => {
     const plan = service
       ? service.plans.find((p) => p.id.toString() === order.planId)
       : null;
-    res
-      .status(200)
-      .json({ success: true, order: { ...order, user, service, plan } });
+
+    let member = {};
+    if (order.assignedTo) {
+      member = await teamCollection.findOne({
+        _id: new ObjectId(order.assignedTo),
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      order: {
+        ...order,
+        user,
+        service,
+        plan,
+        assignedMember: member?.memberName || "Not Assigned",
+      },
+    });
   } catch (error) {
     console.error("Get order error:", error);
     res.status(500).json({ success: false, message: "Failed to fetch order" });
@@ -222,13 +250,12 @@ export const updateOrder = async (req, res) => {
     clientId,
     slug,
     planId,
+    discount,
     status,
     amount,
     payment,
     paymentMethod,
   } = req.body;
-
-  console.log(req.body);
 
   try {
     const order = await orderCollection.findOne({ _id: new ObjectId(orderId) });
@@ -245,6 +272,7 @@ export const updateOrder = async (req, res) => {
           clientId,
           service: slug,
           planId,
+          discount,
           status,
           amount,
           payment,
@@ -286,6 +314,34 @@ export const updateOrderStatus = async (req, res) => {
     res
       .status(500)
       .json({ success: false, message: "Failed to update order status" });
+  }
+};
+
+//assign order to a member
+export const assignOrderToMember = async (req, res) => {
+  const { id } = req.query;
+  const { assignedTo } = req.body;
+  console.log(id, assignedTo);
+
+  try {
+    const result = await orderCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { assignedTo } },
+    );
+    if (result.modifiedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found or status unchanged",
+      });
+    }
+    res
+      .status(200)
+      .json({ success: true, message: "Order assigned to member" });
+  } catch (error) {
+    console.error("Assign order to member error:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to assign order to member" });
   }
 };
 
