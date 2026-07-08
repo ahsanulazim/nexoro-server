@@ -18,9 +18,10 @@ import orderRouter from "./routes/orderRouter.js";
 import paymentRouter from "./routes/paymentRouter.js";
 import dashboardRouter from "./routes/dashboardRouter.js";
 import chartRouter from "./routes/chartRouter.js";
+import { app, server } from "./socket/socket.js";
 
 dotenv.config();
-const app = express();
+
 const port = process.env.PORT || 5000;
 
 app.use(
@@ -52,4 +53,4 @@ app.use("/analytics", chartRouter);
 
 app.get("/", (req, res) => res.send("Hello World!"));
 
-app.listen(port, () => console.log(`Server running on port ${port}`));
+server.listen(port, () => console.log(`Server running on port ${port}`));

@@ -126,7 +126,7 @@ export const getAllOrders = async (req, res) => {
         }
         let userName =
           userRecord?.displayName ||
-          userRecord.name ||
+          userRecord?.name ||
           order.epsData?.CustomerName ||
           "Unknown User";
         let serviceTitle = order.service;
@@ -139,11 +139,11 @@ export const getAllOrders = async (req, res) => {
         });
         if (service) {
           serviceTitle = service.title;
-          const plan = service.plans.find(
-            (p) => p.id.toString() === order.planId?.toString(),
+          const plan = service.plans?.find(
+            (p) => p.id?.toString() === order.planId?.toString(),
           );
-          planName = plan.planName;
-          planPrice = plan.price;
+          planName = plan?.planName || null;
+          planPrice = plan?.price || null;
         }
 
         //assigned member
