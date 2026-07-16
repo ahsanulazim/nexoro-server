@@ -1,9 +1,20 @@
 import { Router } from "express";
-import { sentMessage } from "../controllers/messageController.js";
-import upload from "../middleware/uploadCloudinary.js";
+import {
+  getMessages,
+  getSidebarConversations,
+  sendMessage,
+} from "../controllers/messageController.js";
+import { verifyId } from "../middleware/verifyId.js";
 
 const messageRouter = Router();
 
 //Routes
+messageRouter.post("/sendMessage", verifyId, sendMessage);
+messageRouter.get("/getMessages", verifyId, getMessages);
+messageRouter.get(
+  "/getSidebarConversations",
+  verifyId,
+  getSidebarConversations,
+);
 
-messageRouter.post("/sendMassage", upload.single("image"), sentMessage);
+export default messageRouter;
