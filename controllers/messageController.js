@@ -1,6 +1,7 @@
 import cloudinary from "../config/cloudinary.js";
 import client from "../config/db.js";
 import { io } from "../socket/socket.js";
+import { imageOptimizer } from "../utils/imageOptimizer.js";
 
 const msgCollection = client.db("nexoro").collection("Messages");
 const userCollection = client.db("nexoro").collection("Users");
@@ -29,31 +30,19 @@ export const sendMessage = async (req, res) => {
     let attachments = [];
 
     if (req.file) {
-      const uploadStream = () => {
-        return new Promise((resolve, reject) => {
-          const stream = cloudinary.uploader.upload_stream(
-            {
-              folder: "chat_attachments",
-              resource_type: "auto",
-            },
-            (error, result) => {
-              if (error) {
-                console.log(error);
-                reject(error);
-              } else {
-                resolve(result);
-              }
-            },
-          );
-          stream.end(req.file.buffer);
-        });
-      };
+      console.log(req.file);
 
-      const cloudinaryResult = await uploadStream();
+      const isImage =
+        req.file.mimetype && req.file.mimetype.startsWith("image/");
+      const thumbnailUrl = isImage
+        ? imageOptimizer(req.file.path, 300, 300)
+        : "";
+
       attachments.push({
-        type: cloudinaryResult.resource_type,
-        url: cloudinaryResult.secure_url,
-        publicId: cloudinaryResult.public_id,
+        type: isImage ? "image" : "raw",
+        url: req.file.path,
+        thumbnailUrl,
+        publicId: req.file.filename,
         originalName: req.file.originalname,
       });
     }
@@ -121,7 +110,10 @@ export const sendMessage = async (req, res) => {
         isRead: false,
         senderRole: "customer",
       });
-      io.to("admin_global_room").emit("updateUnreadCount", { roomId, count: unreadCount });
+      io.to("admin_global_room").emit("updateUnreadCount", {
+        roomId,
+        count: unreadCount,
+      });
     }
 
     res.status(201).json({
@@ -139,7 +131,24 @@ export const getMessages = async (req, res) => {
   try {
     const { roomId } = req.query;
 
-    console.log("room id", roomId);
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    if (!roomId) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Room ID is required" });
+    }
+
+    const totalMessages = await msgCollection.countDocuments({ roomId });
+    const totalPages = Math.ceil(totalMessages / limit);
+    if (page > totalPages) {
+      return res.status(400).json({
+        success: false,
+        message: "Page number is greater than total pages",
+      });
+    }
 
     const decodedToken = req.user;
 
@@ -155,13 +164,24 @@ export const getMessages = async (req, res) => {
 
     const messages = await msgCollection
       .find({ roomId })
-      .sort({ createdAt: 1 })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
       .toArray();
+
+    const sortedMessages = messages.reverse();
 
     res.status(200).json({
       success: true,
       message: "Messages fetched successfully",
-      data: messages,
+      data: sortedMessages,
+      pagination: {
+        page,
+        limit,
+        totalMessages,
+        totalPages,
+        hasMore: page < totalPages,
+      },
     });
   } catch (error) {
     console.log(error);
