@@ -20,6 +20,7 @@ import dashboardRouter from "./routes/dashboardRouter.js";
 import chartRouter from "./routes/chartRouter.js";
 import { app, server } from "./socket/socket.js";
 import messageRouter from "./routes/messageRouter.js";
+import facebookRouter from "./routes/facebookRouter.js";
 
 dotenv.config();
 
@@ -52,6 +53,7 @@ app.use("/payment", paymentRouter);
 app.use("/dashboard", dashboardRouter);
 app.use("/analytics", chartRouter);
 app.use("/conversations", messageRouter);
+app.use("/facebook", facebookRouter);
 
 app.get("/", (req, res) => res.send("Hello World!"));
 

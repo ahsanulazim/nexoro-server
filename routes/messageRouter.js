@@ -3,8 +3,10 @@ import {
   getMessages,
   getSidebarConversations,
   sendMessage,
+  deleteConversation,
 } from "../controllers/messageController.js";
 import { verifyId } from "../middleware/verifyId.js";
+import { verifyAdmin } from "../middleware/verifyAdmin.js";
 import upload from "../middleware/uploadCloudinary.js";
 
 const messageRouter = Router();
@@ -22,5 +24,6 @@ messageRouter.get(
   verifyId,
   getSidebarConversations,
 );
+messageRouter.delete("/deleteConversation", verifyAdmin, deleteConversation);
 
 export default messageRouter;

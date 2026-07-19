@@ -30,8 +30,6 @@ export const sendMessage = async (req, res) => {
     let attachments = [];
 
     if (req.file) {
-      console.log(req.file);
-
       const isImage =
         req.file.mimetype && req.file.mimetype.startsWith("image/");
       const thumbnailUrl = isImage
@@ -39,7 +37,7 @@ export const sendMessage = async (req, res) => {
         : "";
 
       attachments.push({
-        type: isImage ? "image" : "raw",
+        type: isImage ? "image" : req.file.mimetype,
         url: req.file.path,
         thumbnailUrl,
         publicId: req.file.filename,
@@ -210,6 +208,56 @@ export const getSidebarConversations = async (req, res) => {
       success: true,
       message: "Conversations fetched successfully",
       data: conversations,
+    });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+export const deleteConversation = async (req, res) => {
+  try {
+    const { roomId } = req.query;
+
+    if (!roomId) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Room ID is required" });
+    }
+
+    // Find all messages in the room to check for attachments
+    const messages = await msgCollection.find({ roomId }).toArray();
+
+    // Iterate through messages and delete attachments from Cloudinary
+    for (const message of messages) {
+      if (message.attachments && message.attachments.length > 0) {
+        for (const attachment of message.attachments) {
+          if (attachment.publicId) {
+            try {
+              await cloudinary.uploader.destroy(attachment.publicId);
+            } catch (cloudinaryError) {
+              console.error(
+                "Error deleting file from Cloudinary:",
+                cloudinaryError,
+              );
+            }
+          }
+        }
+      }
+    }
+
+    // Delete all messages in the room
+    await msgCollection.deleteMany({ roomId });
+
+    // Delete the conversation document
+    await conversationCollection.deleteOne({ roomId });
+
+    // Emit socket event to notify clients
+    io.to(roomId).emit("conversationDeleted", { roomId });
+
+    res.status(200).json({
+      success: true,
+      message: "Conversation deleted successfully",
     });
   } catch (error) {
     console.log(error);
