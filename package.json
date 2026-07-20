@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@socket.io/mongo-adapter": "^0.4.0",
+    "axios": "^1.18.1",
     "body-parser": "^2.2.0",
     "cloudinary": "^1.41.3",
     "cors": "^2.8.5",
