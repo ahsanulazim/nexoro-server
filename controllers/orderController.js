@@ -1,6 +1,7 @@
 import { ObjectId } from "mongodb";
 import admin from "../admin/firebase.config.js";
 import client from "../config/db.js";
+import { createAndSendNotification } from "../utils/notificationHelper.js";
 
 const orderCollection = client.db("nexoro").collection("Orders");
 const orderCounterCollection = client.db("nexoro").collection("Counters");
@@ -49,6 +50,15 @@ export const createOrder = async (req, res) => {
       paymentMethod,
       createdAt: new Date(),
     });
+
+    // Send admin notification
+    await createAndSendNotification({
+      type: "new_order",
+      title: "New Order Placed",
+      message: `Order ${orderId} has been created for ${serviceData?.title || slug}.`,
+      link: "/dashboard/orders",
+    });
+
     res.status(200).send({ success: true, order });
   } catch (error) {
     console.error("Order error:", error);
@@ -85,6 +95,15 @@ export const confirmOrder = async (req, res) => {
       epsData: req.paymentData || null,
       createdAt: new Date(),
     });
+
+    // Send admin notification
+    await createAndSendNotification({
+      type: "new_order",
+      title: "New Order Placed",
+      message: `Order ${orderId} has been placed by a customer.`,
+      link: "/dashboard/orders",
+    });
+
     res.status(200).send({ success: true, orderId: order.insertedId });
   } catch (error) {
     console.error("Order error:", error);
@@ -286,6 +305,45 @@ export const updateOrder = async (req, res) => {
         message: "Order not found or status unchanged",
       });
     }
+
+    // Trigger notification if status changed
+    if (status && status !== order.status) {
+      if (status === "Completed") {
+        await createAndSendNotification({
+          type: "order_completed",
+          title: "Order Completed",
+          message: `Order ${order.orderId} has been marked as Completed.`,
+          link: "/dashboard/orders",
+        });
+      } else if (status === "Cancelled") {
+        await createAndSendNotification({
+          type: "order_cancelled",
+          title: "Order Cancelled",
+          message: `Order ${order.orderId} has been Cancelled.`,
+          link: "/dashboard/orders",
+        });
+      }
+    }
+
+    // Trigger notification if payment status changed
+    if (payment && payment !== order.payment) {
+      if (payment === "Success") {
+        await createAndSendNotification({
+          type: "payment_completed",
+          title: "Payment Completed",
+          message: `Payment of BDT ${amount || order.amount || 0} received for order ${order.orderId}.`,
+          link: "/dashboard/orders",
+        });
+      } else if (payment === "Pending") {
+        await createAndSendNotification({
+          type: "payment_due",
+          title: "Payment Due",
+          message: `Payment status updated to Pending for order ${order.orderId}.`,
+          link: "/dashboard/orders",
+        });
+      }
+    }
+
     res.status(200).json({ success: true, message: "Order updated" });
   } catch (error) {
     console.error("Update order error:", error);
@@ -298,6 +356,11 @@ export const updateOrderStatus = async (req, res) => {
   const { orderId } = req.params;
   const { status } = req.body;
   try {
+    const order = await orderCollection.findOne({ _id: new ObjectId(orderId) });
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
     const result = await orderCollection.updateOne(
       { _id: new ObjectId(orderId) },
       { $set: { status } },
@@ -308,6 +371,23 @@ export const updateOrderStatus = async (req, res) => {
         message: "Order not found or status unchanged",
       });
     }
+
+    if (status === "Completed") {
+      await createAndSendNotification({
+        type: "order_completed",
+        title: "Order Completed",
+        message: `Order ${order.orderId} has been marked as Completed.`,
+        link: "/dashboard/orders",
+      });
+    } else if (status === "Cancelled") {
+      await createAndSendNotification({
+        type: "order_cancelled",
+        title: "Order Cancelled",
+        message: `Order ${order.orderId} has been Cancelled.`,
+        link: "/dashboard/orders",
+      });
+    }
+
     res.status(200).json({ success: true, message: "Order status updated" });
   } catch (error) {
     console.error("Update order status error:", error);

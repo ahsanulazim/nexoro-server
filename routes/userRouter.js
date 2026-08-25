@@ -15,11 +15,11 @@ import { verifyAdmin } from "../middleware/verifyAdmin.js";
 const router = express.Router();
 
 // routes
-router.post("/", createUser);
-router.get("/getUser", getUser);
+router.post("/", verifyId, createUser);
+router.get("/getUser", verifyId, getUser);
 router.get("/", verifyId, verifyAdmin, getAllUsers);
 router.get("/team/members", getAllMembers);
-router.put("/updateUser", updateUser);
+router.put("/updateUser", verifyId, updateUser);
 router.put("/promote", promoteUser);
 router.put("/demote", demoteMember);
 router.delete("/delete", verifyId, verifyAdmin, deleteUser);

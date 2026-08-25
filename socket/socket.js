@@ -3,6 +3,7 @@ import http from "http";
 import { Server } from "socket.io";
 import client from "../config/db.js";
 import admin from "../admin/firebase.config.js";
+import { createAndSendNotification } from "../utils/notificationHelper.js";
 
 const app = express();
 const server = http.createServer(app);
@@ -157,6 +158,14 @@ io.on("connection", async (socket) => {
         senderRole: "customer",
       });
       io.to(ADMIN_ROOM).emit("updateUnreadCount", { roomId, count: unreadCount });
+
+      // Create message notification for admin
+      await createAndSendNotification({
+        type: "new_message",
+        title: "New Message Received",
+        message: `You received a message from ${email || "Customer"}: "${text.length > 40 ? text.substring(0, 37) + '...' : text}"`,
+        link: `/dashboard/inbox/web/${_id}`,
+      });
     }
   });
 
