@@ -23,12 +23,12 @@ import messageRouter from "./routes/messageRouter.js";
 import facebookRouter from "./routes/facebookRouter.js";
 import notificationRouter from "./routes/notificationRouter.js";
 import { initNotificationTTL } from "./utils/notificationHelper.js";
+import projectRouter from "./routes/projectRouter.js";
 
 dotenv.config();
 
 // Initialize TTL index for notifications (auto-cleanup after 60 days)
 initNotificationTTL();
-
 
 const port = process.env.PORT || 5000;
 
@@ -61,6 +61,7 @@ app.use("/analytics", chartRouter);
 app.use("/conversations", messageRouter);
 app.use("/facebook", facebookRouter);
 app.use("/notifications", notificationRouter);
+app.use("/projects", projectRouter);
 
 app.get("/", (req, res) => res.send("Hello World!"));
 

@@ -25,27 +25,54 @@ export const getNextOrderId = async () => {
 //create order
 
 export const createOrder = async (req, res) => {
-  const { clientId, slug, planId, discount, payment, paymentMethod, amount } =
-    req.body;
+  const {
+    clientId,
+    slug,
+    planId,
+    serviceName,
+    servicePrice,
+    discount,
+    payment,
+    paymentMethod,
+    amount,
+  } = req.body;
 
   try {
     const orderId = await getNextOrderId();
-    const serviceData = await serviceCollection.findOne({ slug });
-    const planData = serviceData?.plans.find(
-      (plan) => plan.id.toString() === planId,
-    );
+
+    let price = 0;
+    let serviceTitle = slug;
+
+    if (slug === "custom") {
+      price = Number(servicePrice) || 0;
+      serviceTitle = serviceName || "Custom Service";
+    } else {
+      const serviceData = await serviceCollection.findOne({ slug });
+      const planData = serviceData?.plans?.find(
+        (plan) => plan.id?.toString() === planId?.toString(),
+      );
+      price = Number(planData?.price) || 0;
+      serviceTitle = serviceData?.title || slug;
+    }
+
+    const discountNum = Number(discount) || 0;
+    const amountNum =
+      payment === "Success" ? price - discountNum : Number(amount) || 0;
 
     const order = await orderCollection.insertOne({
       clientId,
       orderId,
       service: slug,
-      planId,
-      price: Number(planData?.price),
-      discount,
+      serviceName: slug === "custom" ? serviceName : undefined,
+      servicePrice: slug === "custom" ? price : undefined,
+      planId: slug === "custom" ? null : planId,
+      price,
+      discount: discountNum,
       status: "Pending",
       createdBy: "Admin",
       assignedTo: null,
-      amount: payment === "Success" ? Number(planData?.price) : amount,
+      tasks: [],
+      amount: amountNum,
       payment,
       paymentMethod,
       createdAt: new Date(),
@@ -55,7 +82,7 @@ export const createOrder = async (req, res) => {
     await createAndSendNotification({
       type: "new_order",
       title: "New Order Placed",
-      message: `Order ${orderId} has been created for ${serviceData?.title || slug}.`,
+      message: `Order ${orderId} has been created for ${serviceTitle}.`,
       link: "/dashboard/orders",
     });
 
@@ -89,6 +116,7 @@ export const confirmOrder = async (req, res) => {
       status: "Pending",
       createdBy: "User",
       assignedTo: null,
+      tasks: [],
       payment: req.paymentData.Status || "Pending",
       paymentMethod: req.paymentData.FinancialEntity,
       amount: Number(plan?.price),
@@ -147,22 +175,29 @@ export const getAllOrders = async (req, res) => {
           userRecord?.displayName ||
           userRecord?.name ||
           order.epsData?.CustomerName ||
+          order.clientName ||
           "Unknown User";
         let serviceTitle = order.service;
         let planName = null;
-        let planPrice = null;
+        let planPrice = order.price || 0;
 
-        // Service info
-        const service = await serviceCollection.findOne({
-          slug: order.service,
-        });
-        if (service) {
-          serviceTitle = service.title;
-          const plan = service.plans?.find(
-            (p) => p.id?.toString() === order.planId?.toString(),
-          );
-          planName = plan?.planName || null;
-          planPrice = plan?.price || null;
+        if (order.service === "custom") {
+          serviceTitle = order.serviceName || "Custom Service";
+          planName = "Custom Plan";
+          planPrice = order.servicePrice || order.price || 0;
+        } else {
+          // Service info
+          const service = await serviceCollection.findOne({
+            slug: order.service,
+          });
+          if (service) {
+            serviceTitle = service.title;
+            const plan = service.plans?.find(
+              (p) => p.id?.toString() === order.planId?.toString(),
+            );
+            planName = plan?.planName || null;
+            planPrice = Number(plan?.price) || order.price || 0;
+          }
         }
 
         //assigned member
@@ -173,17 +208,23 @@ export const getAllOrders = async (req, res) => {
           });
         }
 
+        const effectivePrice = Number(planPrice) || 0;
+        const discountVal = Number(order.discount) || 0;
+        const amountVal = Number(order.amount) || 0;
+        const dueAmount = effectivePrice - discountVal - amountVal;
+
         return {
           orderId: order._id.toString(),
           orderUid: order.orderId,
-          userName: userName || order.epsData.customerName || order.clientName,
+          userName: userName || order.epsData?.customerName || order.clientName,
           serviceTitle,
           planName,
-          price: planPrice,
+          price: effectivePrice,
           amount: order.amount,
-          dueAmount: planPrice - order.discount - order.amount,
+          dueAmount: dueAmount > 0 ? dueAmount : 0,
           assignedTo: order.assignedTo,
           assignedMember: member?.memberName || null,
+          tasks: order.tasks || [],
           createdBy: order.createdBy,
           payment: order.payment,
           paymentMethod: order.paymentMethod,
@@ -227,16 +268,34 @@ export const getOrder = async (req, res) => {
     if (order.uid) {
       const userRecord = await admin.auth().getUser(order.uid);
       user = { name: userRecord.displayName, email: userRecord.email };
-    } else {
+    } else if (order.clientId) {
       const client = await clientCollection.findOne({
         _id: new ObjectId(order.clientId),
       });
-      user = { name: client.name, email: client.email };
+      user = { name: client?.name, email: client?.email };
     }
-    const service = await serviceCollection.findOne({ slug: order.service });
-    const plan = service
-      ? service.plans.find((p) => p.id.toString() === order.planId)
-      : null;
+
+    let service = null;
+    let plan = null;
+
+    if (order.service === "custom") {
+      service = {
+        title: order.serviceName || "Custom Service",
+        slug: "custom",
+      };
+      plan = {
+        id: "custom",
+        planName: "Custom Plan",
+        price: order.servicePrice || order.price || 0,
+      };
+    } else {
+      service = await serviceCollection.findOne({ slug: order.service });
+      plan = service
+        ? service.plans?.find(
+            (p) => p.id?.toString() === order.planId?.toString(),
+          )
+        : null;
+    }
 
     let member = {};
     if (order.assignedTo) {
@@ -269,6 +328,8 @@ export const updateOrder = async (req, res) => {
     clientId,
     slug,
     planId,
+    serviceName,
+    servicePrice,
     discount,
     status,
     amount,
@@ -283,26 +344,48 @@ export const updateOrder = async (req, res) => {
         .status(404)
         .json({ success: false, message: "Order not found" });
     }
+
+    let price = order.price || 0;
+    if (slug === "custom") {
+      price = Number(servicePrice) || order.price || 0;
+    } else if (slug) {
+      const serviceData = await serviceCollection.findOne({ slug });
+      const planData = serviceData?.plans?.find(
+        (plan) => plan.id?.toString() === planId?.toString(),
+      );
+      if (planData?.price) {
+        price = Number(planData.price);
+      }
+    }
+
+    const discountNum = Number(discount) || 0;
+    const amountNum = Number(amount) || 0;
+
+    const updateDoc = {
+      ...(uid && { uid }),
+      ...(clientId && { clientId }),
+      service: slug,
+      planId: slug === "custom" ? null : planId,
+      serviceName: slug === "custom" ? serviceName : null,
+      servicePrice: slug === "custom" ? price : null,
+      price,
+      discount: discountNum,
+      status,
+      amount: amountNum,
+      payment,
+      paymentMethod,
+    };
+
     const result = await orderCollection.updateOne(
       { _id: new ObjectId(orderId) },
       {
-        $set: {
-          uid,
-          clientId,
-          service: slug,
-          planId,
-          discount,
-          status,
-          amount,
-          payment,
-          paymentMethod,
-        },
+        $set: updateDoc,
       },
     );
-    if (result.modifiedCount === 0) {
+    if (result.matchedCount === 0) {
       return res.status(404).json({
         success: false,
-        message: "Order not found or status unchanged",
+        message: "Order not found",
       });
     }
 
@@ -331,7 +414,7 @@ export const updateOrder = async (req, res) => {
         await createAndSendNotification({
           type: "payment_completed",
           title: "Payment Completed",
-          message: `Payment of BDT ${amount || order.amount || 0} received for order ${order.orderId}.`,
+          message: `Payment of BDT ${amountNum || order.amount || 0} received for order ${order.orderId}.`,
           link: "/dashboard/orders",
         });
       } else if (payment === "Pending") {
@@ -358,7 +441,9 @@ export const updateOrderStatus = async (req, res) => {
   try {
     const order = await orderCollection.findOne({ _id: new ObjectId(orderId) });
     if (!order) {
-      return res.status(404).json({ success: false, message: "Order not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
     }
 
     const result = await orderCollection.updateOne(
@@ -400,23 +485,37 @@ export const updateOrderStatus = async (req, res) => {
 //assign order to a member
 export const assignOrderToMember = async (req, res) => {
   const { id } = req.query;
-  const { assignedTo } = req.body;
-  console.log(id, assignedTo);
+  const { assignedTo, tasks } = req.body;
+  console.log(id, assignedTo, tasks);
 
   try {
+    const formattedTasks = Array.isArray(tasks)
+      ? tasks
+          .filter((t) => t?.task && t.task.trim() !== "")
+          .map((t) => ({
+            task: t.task.trim(),
+            isCompleted: false,
+          }))
+      : [];
+
+    const updateDoc = {
+      assignedTo,
+      tasks: formattedTasks,
+    };
+
     const result = await orderCollection.updateOne(
       { _id: new ObjectId(id) },
-      { $set: { assignedTo } },
+      { $set: updateDoc },
     );
-    if (result.modifiedCount === 0) {
+    if (result.matchedCount === 0) {
       return res.status(404).json({
         success: false,
-        message: "Order not found or status unchanged",
+        message: "Order not found",
       });
     }
     res
       .status(200)
-      .json({ success: true, message: "Order assigned to member" });
+      .json({ success: true, message: "Order assigned to member with tasks" });
   } catch (error) {
     console.error("Assign order to member error:", error);
     res
