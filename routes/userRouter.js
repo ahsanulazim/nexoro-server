@@ -15,7 +15,7 @@ import { verifyAdmin } from "../middleware/verifyAdmin.js";
 const router = express.Router();
 
 // routes
-router.post("/", verifyId, createUser);
+router.post("/add", verifyId, createUser);
 router.get("/getUser", verifyId, getUser);
 router.get("/", verifyId, verifyAdmin, getAllUsers);
 router.get("/team/members", getAllMembers);

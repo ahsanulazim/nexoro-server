@@ -6,46 +6,35 @@ await userCollection.createIndex({ email: 1 }, { unique: true });
 
 // Create new user
 export const createUser = async (req, res) => {
-  const { userName, email } = req.body;
+  const { name, email } = req.body;
   const uid = req.user?.uid;
   const emailVerified = req.user?.email_verified || false;
   // Check if sign-in provider is Google
-  const firebaseProvider = req.user?.firebase?.sign_in_provider;
-  const google = firebaseProvider === "google.com";
   const role = "customer";
   const createdAt = new Date();
   const newUser = {
-    userName,
+    name,
     email,
-    google,
     uid,
     role,
+    emailVerified,
     createdAt,
   };
   try {
-    const user = await userCollection.findOneAndUpdate(
-      { uid },
-      {
-        $setOnInsert: newUser,
-        $set: {
-          emailVerified,
-          lastLoginAt: new Date(),
-        },
-      },
-      { upsert: true, returnDocument: "after" },
-    );
-
+    const existingUser = await userCollection.findOne({ email });
+    if (existingUser) {
+      return res.status(200).send({
+        success: false,
+        message: "User already exists",
+      });
+    }
+    await userCollection.insertOne(newUser);
     return res.status(200).send({
       success: true,
       message: "User synced successfully",
-      user,
+      user: newUser,
     });
   } catch (error) {
-    if (error.code === 11000) {
-      return res
-        .status(400)
-        .send({ success: false, message: "User already exists" });
-    }
     console.error("Create user error:", error);
     res.status(500).send({ success: false, message: "Failed to create user" });
   }
@@ -53,52 +42,15 @@ export const createUser = async (req, res) => {
 
 // Get single user
 export const getUser = async (req, res) => {
-  const decodedToken = req.user;
-
-  if (!decodedToken || !decodedToken.email) {
-    return res.status(401).send({ message: "Unauthorized" });
-  }
-
-  const email = decodedToken.email;
-  const uid = decodedToken.uid;
-  const emailVerified = decodedToken.email_verified || false;
-  const firebaseProvider = decodedToken.firebase?.sign_in_provider;
-  const google = firebaseProvider === "google.com";
-
   try {
-    let user = await userCollection.findOne({ email });
-
+    const email = req.user.email;
+    const user = await userCollection.findOne({ email });
     if (!user) {
-      // Auto-create user if they exist in Firebase but not in MongoDB yet
-      const role = "customer";
-      const createdAt = new Date();
-      const newUser = {
-        userName: decodedToken.name || email.split("@")[0],
-        email,
-        google,
-        uid,
-        role,
-        createdAt,
-        emailVerified,
-        lastLoginAt: new Date(),
-      };
-      await userCollection.insertOne(newUser);
-      user = newUser;
-    } else {
-      // Sync UID, emailVerified, and lastLoginAt to MongoDB
-      user = await userCollection.findOneAndUpdate(
-        { email },
-        {
-          $set: {
-            uid,
-            emailVerified,
-            lastLoginAt: new Date(),
-          },
-        },
-        { returnDocument: "after" }
-      );
+      return res.status(200).send({
+        success: false,
+        message: "User not found",
+      });
     }
-
     return res.status(200).json({ success: true, user });
   } catch (error) {
     console.error("Get user error:", error);
