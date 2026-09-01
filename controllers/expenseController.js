@@ -42,15 +42,37 @@ export const addExpense = async (req, res) => {
 };
 
 export const getAllExpenses = async (req, res) => {
+  const page = Math.max(parseInt(req.query.page) || 1, 1);
+  const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+  const searchTerm = req.query.search?.trim() || "";
+  const skip = (page - 1) * limit;
+
+  let query = {};
+
+  if (searchTerm) {
+    query = {
+      $or: [
+        { title: { $regex: searchTerm, $options: "i" } },
+        { paidTo: { $regex: searchTerm, $options: "i" } },
+        { invoice: { $regex: searchTerm, $options: "i" } },
+      ],
+    };
+  }
+  const count = await expenseCollection.countDocuments(query);
+
   try {
     const expenses = await expenseCollection
-      .find({})
+      .find(query)
       .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
       .toArray();
     if (!expenses) {
       return res.status(404).json({ message: "No expenses found" });
     }
-    res.status(200).json(expenses);
+
+    const totalPages = Math.ceil(count / limit);
+    res.status(200).json({ expenses, totalPages });
   } catch (error) {
     res.status(500).json({ message: "Failed to get expenses", error });
   }
