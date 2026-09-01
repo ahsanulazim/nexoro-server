@@ -1,0 +1,100 @@
+import { ObjectId } from "mongodb";
+import client from "../config/db.js";
+
+const expenseCollection = client.db("nexoro").collection("expenses");
+
+export const addExpense = async (req, res) => {
+  const {
+    title,
+    invoice,
+    invoiceDate,
+    amount,
+    paymentStatus,
+    paymentMethod,
+    paidTo,
+    frequency,
+    note,
+  } = req.body;
+
+  if (!title || !amount) {
+    return res.status(400).json({ message: "Title and amount are required" });
+  }
+
+  const expense = {
+    title,
+    invoice,
+    invoiceDate,
+    amount,
+    paymentStatus,
+    paymentMethod,
+    paidTo,
+    frequency,
+    note,
+    createdAt: new Date(),
+  };
+
+  try {
+    const result = await expenseCollection.insertOne(expense);
+    res.status(201).json(result);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to add expense", error });
+  }
+};
+
+export const getAllExpenses = async (req, res) => {
+  try {
+    const expenses = await expenseCollection
+      .find({})
+      .sort({ createdAt: -1 })
+      .toArray();
+    if (!expenses) {
+      return res.status(404).json({ message: "No expenses found" });
+    }
+    res.status(200).json(expenses);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to get expenses", error });
+  }
+};
+
+export const getExpense = async (req, res) => {
+  const { id } = req.query;
+  try {
+    const expense = await expenseCollection.findOne({ _id: new ObjectId(id) });
+    if (!expense) {
+      return res.status(404).json({ message: "No expense found" });
+    }
+    res.status(200).json(expense);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to get expense", error });
+  }
+};
+
+export const updateExpense = async (req, res) => {
+  const { id } = req.query;
+  const updatedData = req.body;
+  try {
+    const result = await expenseCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updatedData },
+    );
+    if (result.modifiedCount === 0) {
+      return res.status(404).json({ message: "No expense found" });
+    }
+    res.status(200).json(result);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to update expense", error });
+  }
+};
+
+export const deleteExpense = async (req, res) => {
+  const { id } = req.query;
+  try {
+    const result = await expenseCollection.deleteOne({ _id: new ObjectId(id) });
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ message: "No expense found" });
+    }
+    res.status(200).json(result);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to delete expense", error });
+  }
+};

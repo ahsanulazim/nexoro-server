@@ -24,6 +24,7 @@ import facebookRouter from "./routes/facebookRouter.js";
 import notificationRouter from "./routes/notificationRouter.js";
 import { initNotificationTTL } from "./utils/notificationHelper.js";
 import projectRouter from "./routes/projectRouter.js";
+import expenseRouter from "./routes/expenseRouter.js";
 
 dotenv.config();
 
@@ -62,6 +63,7 @@ app.use("/conversations", messageRouter);
 app.use("/facebook", facebookRouter);
 app.use("/notifications", notificationRouter);
 app.use("/projects", projectRouter);
+app.use("/expenses", expenseRouter);
 
 app.get("/", (req, res) => res.send("Hello World!"));
 
