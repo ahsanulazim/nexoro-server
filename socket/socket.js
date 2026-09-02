@@ -94,6 +94,15 @@ io.on("connection", async (socket) => {
     } catch (error) {
       console.log("Error in getting unread messages:", error);
     }
+
+    // Send initial real-time dashboard stats to admin on connect
+    try {
+      const { getLatestDashboardStats } = await import("../utils/dashboardHelper.js");
+      const initialStats = await getLatestDashboardStats();
+      socket.emit("dashboardStatsUpdate", initialStats);
+    } catch (error) {
+      console.log("Error in sending initial dashboard stats:", error);
+    }
   } else {
     socket.join(`room_${_id}`);
   }

@@ -1,5 +1,6 @@
 import client from "../config/db.js";
 import admin from "../admin/firebase.config.js";
+import { broadcastDashboardStats } from "../utils/dashboardHelper.js";
 
 const userCollection = client.db("nexoro").collection("Users");
 await userCollection.createIndex({ email: 1 }, { unique: true });
@@ -29,6 +30,12 @@ export const createUser = async (req, res) => {
       });
     }
     await userCollection.insertOne(newUser);
+
+    // Real-time broadcast for dashboard stats
+    broadcastDashboardStats().catch((err) =>
+      console.error("Dashboard stats broadcast error:", err)
+    );
+
     return res.status(200).send({
       success: true,
       message: "User synced successfully",
@@ -168,6 +175,11 @@ export const deleteUser = async (req, res) => {
     await admin.auth().deleteUser(userRecord.uid);
     const result = await userCollection.deleteOne({ email });
     if (result.deletedCount > 0) {
+      // Real-time broadcast for dashboard stats
+      broadcastDashboardStats().catch((err) =>
+        console.error("Dashboard stats broadcast error:", err)
+      );
+
       return res.send({ success: true, message: "User deleted successfully" });
     } else {
       return res.send({ success: false, message: "User not found in MongoDB" });

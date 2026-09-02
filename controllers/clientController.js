@@ -1,6 +1,7 @@
 import { ObjectId } from "mongodb";
 import client from "../config/db.js";
 import cloudinary from "../config/cloudinary.js";
+import { broadcastDashboardStats } from "../utils/dashboardHelper.js";
 
 const clientCollection = client.db("nexoro").collection("Clients");
 await clientCollection.createIndex({ email: 1 }, { unique: true });
@@ -24,6 +25,12 @@ export const createClient = async (req, res) => {
       public_id: filename,
       joined,
     });
+
+    // Real-time broadcast for dashboard stats
+    broadcastDashboardStats().catch((err) =>
+      console.error("Dashboard stats broadcast error:", err)
+    );
+
     res.status(200).send({ success: true });
   } catch (error) {
     if (error.code === 11000) {
@@ -50,6 +57,11 @@ export const deleteClient = async (req, res) => {
   try {
     const result = await clientCollection.deleteOne({ email });
     if (result.deletedCount > 0) {
+      // Real-time broadcast for dashboard stats
+      broadcastDashboardStats().catch((err) =>
+        console.error("Dashboard stats broadcast error:", err)
+      );
+
       return res.send({
         success: true,
         message: "Client deleted successfully",

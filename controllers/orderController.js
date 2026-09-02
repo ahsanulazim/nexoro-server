@@ -2,6 +2,7 @@ import { ObjectId } from "mongodb";
 import admin from "../admin/firebase.config.js";
 import client from "../config/db.js";
 import { createAndSendNotification } from "../utils/notificationHelper.js";
+import { broadcastDashboardStats } from "../utils/dashboardHelper.js";
 
 const orderCollection = client.db("nexoro").collection("Orders");
 const orderCounterCollection = client.db("nexoro").collection("Counters");
@@ -86,6 +87,11 @@ export const createOrder = async (req, res) => {
       link: "/dashboard/orders",
     });
 
+    // Real-time broadcast for dashboard stats
+    broadcastDashboardStats().catch((err) =>
+      console.error("Dashboard stats broadcast error:", err)
+    );
+
     res.status(200).send({ success: true, order });
   } catch (error) {
     console.error("Order error:", error);
@@ -131,6 +137,11 @@ export const confirmOrder = async (req, res) => {
       message: `Order ${orderId} has been placed by a customer.`,
       link: "/dashboard/orders",
     });
+
+    // Real-time broadcast for dashboard stats
+    broadcastDashboardStats().catch((err) =>
+      console.error("Dashboard stats broadcast error:", err)
+    );
 
     res.status(200).send({ success: true, orderId: order.insertedId });
   } catch (error) {
@@ -427,6 +438,11 @@ export const updateOrder = async (req, res) => {
       }
     }
 
+    // Real-time broadcast for dashboard stats & charts
+    broadcastDashboardStats().catch((err) =>
+      console.error("Dashboard stats broadcast error:", err)
+    );
+
     res.status(200).json({ success: true, message: "Order updated" });
   } catch (error) {
     console.error("Update order error:", error);
@@ -473,6 +489,11 @@ export const updateOrderStatus = async (req, res) => {
       });
     }
 
+    // Real-time broadcast for dashboard stats
+    broadcastDashboardStats().catch((err) =>
+      console.error("Dashboard stats broadcast error:", err)
+    );
+
     res.status(200).json({ success: true, message: "Order status updated" });
   } catch (error) {
     console.error("Update order status error:", error);
@@ -513,6 +534,12 @@ export const assignOrderToMember = async (req, res) => {
         message: "Order not found",
       });
     }
+
+    // Real-time broadcast for dashboard stats (assigned vs pending projects updated)
+    broadcastDashboardStats().catch((err) =>
+      console.error("Dashboard stats broadcast error:", err)
+    );
+
     res
       .status(200)
       .json({ success: true, message: "Order assigned to member with tasks" });
@@ -537,6 +564,12 @@ export const deleteOrder = async (req, res) => {
         .status(404)
         .json({ success: false, message: "Order not found" });
     }
+
+    // Real-time broadcast for dashboard stats
+    broadcastDashboardStats().catch((err) =>
+      console.error("Dashboard stats broadcast error:", err)
+    );
+
     res.status(200).json({ success: true, message: "Order deleted" });
   } catch (error) {
     console.error("Delete order error:", error);

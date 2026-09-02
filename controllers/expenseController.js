@@ -1,5 +1,6 @@
 import { ObjectId } from "mongodb";
 import client from "../config/db.js";
+import { broadcastDashboardStats } from "../utils/dashboardHelper.js";
 
 const expenseCollection = client.db("nexoro").collection("expenses");
 
@@ -35,6 +36,12 @@ export const addExpense = async (req, res) => {
 
   try {
     const result = await expenseCollection.insertOne(expense);
+
+    // Real-time broadcast for dashboard stats
+    broadcastDashboardStats().catch((err) =>
+      console.error("Dashboard stats broadcast error:", err)
+    );
+
     res.status(201).json(result);
   } catch (error) {
     res.status(500).json({ message: "Failed to add expense", error });
@@ -115,6 +122,12 @@ export const deleteExpense = async (req, res) => {
     if (result.deletedCount === 0) {
       return res.status(404).json({ message: "No expense found" });
     }
+
+    // Real-time broadcast for dashboard stats
+    broadcastDashboardStats().catch((err) =>
+      console.error("Dashboard stats broadcast error:", err)
+    );
+
     res.status(200).json(result);
   } catch (error) {
     res.status(500).json({ message: "Failed to delete expense", error });
