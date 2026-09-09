@@ -55,6 +55,39 @@ export const getAllProjects = async (req, res) => {
             as: "teamMember",
           },
         },
+        // Lookup registered user from Users collection by matching _id with order.assignedTo
+        {
+          $lookup: {
+            from: "Users",
+            let: { assignedToId: "$assignedTo" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $ne: ["$$assignedToId", null] },
+                      { $ne: ["$$assignedToId", ""] },
+                      {
+                        $eq: [
+                          "$_id",
+                          {
+                            $convert: {
+                              input: "$$assignedToId",
+                              to: "objectId",
+                              onError: null,
+                              onNull: null,
+                            },
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                },
+              },
+            ],
+            as: "userMember",
+          },
+        },
         // Lookup client name from Clients collection (if clientId exists)
         {
           $lookup: {
@@ -94,11 +127,12 @@ export const getAllProjects = async (req, res) => {
             as: "clientDoc",
           },
         },
-        // Extract matched service, member, and client
+        // Extract matched service, member, user, and client
         {
           $addFields: {
             matchedService: { $arrayElemAt: ["$serviceDoc", 0] },
             matchedMember: { $arrayElemAt: ["$teamMember", 0] },
+            matchedUser: { $arrayElemAt: ["$userMember", 0] },
             matchedClient: { $arrayElemAt: ["$clientDoc", 0] },
           },
         },
@@ -172,9 +206,46 @@ export const getAllProjects = async (req, res) => {
             },
             price: 1,
             assignedTo: {
-              $ifNull: ["$matchedMember.memberName", null],
+              $ifNull: [
+                "$matchedUser.name",
+                { $ifNull: ["$matchedMember.memberName", null] },
+              ],
             },
+            assignedToId: "$assignedTo",
+            assignedMemberEmail: {
+              $ifNull: [
+                "$matchedUser.email",
+                { $ifNull: ["$matchedMember.email", null] },
+              ],
+            },
+            assignedMemberRole: {
+              $ifNull: [
+                "$matchedUser.role",
+                { $ifNull: ["$matchedMember.role", null] },
+              ],
+            },
+            status: 1,
+            amount: {
+              $convert: {
+                input: "$amount",
+                to: "double",
+                onError: 0,
+                onNull: 0,
+              },
+            },
+            discount: {
+              $convert: {
+                input: "$discount",
+                to: "double",
+                onError: 0,
+                onNull: 0,
+              },
+            },
+            payment: 1,
+            paymentMethod: 1,
             tasks: 1,
+            costs: { $ifNull: ["$costs", []] },
+            totalCost: { $ifNull: ["$totalCost", 0] },
             createdBy: 1,
             createdAt: 1,
             updatedAt: 1,

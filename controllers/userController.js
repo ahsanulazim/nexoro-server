@@ -87,6 +87,23 @@ export const getAllMembers = async (req, res) => {
   }
 };
 
+// Get assignable users (registered members and admins)
+export const getAssignableUsers = async (req, res) => {
+  try {
+    const users = await userCollection
+      .find({ role: { $in: ["member", "admin"] } })
+      .project({ name: 1, email: 1, role: 1, uid: 1 })
+      .sort({ role: 1, name: 1 })
+      .toArray();
+    res.status(200).json(users);
+  } catch (error) {
+    console.error("Get assignable users error:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch assignable users", error });
+  }
+};
+
 // Promote User
 export const promoteUser = async (req, res) => {
   const email = req.query.email;

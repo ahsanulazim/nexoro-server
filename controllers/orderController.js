@@ -3,6 +3,7 @@ import admin from "../admin/firebase.config.js";
 import client from "../config/db.js";
 import { createAndSendNotification } from "../utils/notificationHelper.js";
 import { broadcastDashboardStats } from "../utils/dashboardHelper.js";
+import { convertToBDT } from "../utils/currencyHelper.js";
 
 const orderCollection = client.db("nexoro").collection("Orders");
 const orderCounterCollection = client.db("nexoro").collection("Counters");
@@ -10,6 +11,7 @@ const serviceCollection = client.db("nexoro").collection("Services");
 const countriesCollection = client.db("nexoro").collection("Countries");
 const clientCollection = client.db("nexoro").collection("Clients");
 const teamCollection = client.db("nexoro").collection("Team");
+const userCollection = client.db("nexoro").collection("Users");
 
 // Helper: Generate unique orderId using counters collection
 export const getNextOrderId = async () => {
@@ -18,9 +20,8 @@ export const getNextOrderId = async () => {
     { $inc: { sequenceValue: 1 } },
     { returnDocument: "after", upsert: true },
   );
-  const seq = counter.sequenceValue;
-  const datePart = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  return `ORD-${datePart}-${seq}`;
+  const seq = counter?.sequenceValue ?? counter?.value?.sequenceValue ?? 1;
+  return `ORD-${seq}`;
 };
 
 //create order
@@ -43,22 +44,37 @@ export const createOrder = async (req, res) => {
 
     let price = 0;
     let serviceTitle = slug;
+    let discountNum = 0;
+    let amountNum = 0;
 
     if (slug === "custom") {
+      // Custom service: direct BDT, no conversion needed
       price = Number(servicePrice) || 0;
       serviceTitle = serviceName || "Custom Service";
+      discountNum = Number(discount) || 0;
+      amountNum =
+        payment === "Success" ? price - discountNum : Number(amount) || 0;
     } else {
+      // Predefined plans: USD prices, convert to BDT
       const serviceData = await serviceCollection.findOne({ slug });
       const planData = serviceData?.plans?.find(
         (plan) => plan.id?.toString() === planId?.toString(),
       );
-      price = Number(planData?.price) || 0;
+      const planPriceUSD = Number(planData?.price) || 0;
+      price = await convertToBDT(planPriceUSD);
       serviceTitle = serviceData?.title || slug;
-    }
 
-    const discountNum = Number(discount) || 0;
-    const amountNum =
-      payment === "Success" ? price - discountNum : Number(amount) || 0;
+      discountNum = Number(discount)
+        ? await convertToBDT(Number(discount))
+        : 0;
+
+      amountNum =
+        payment === "Success"
+          ? price - discountNum
+          : Number(amount)
+            ? await convertToBDT(Number(amount))
+            : 0;
+    }
 
     const order = await orderCollection.insertOne({
       clientId,
@@ -112,20 +128,24 @@ export const confirmOrder = async (req, res) => {
     });
 
     const plan = service?.plans.find((plan) => plan.id.toString() === planId);
+    const planPriceUSD = Number(plan?.price) || 0;
+    const convertedPrice = await convertToBDT(planPriceUSD);
+    const paidAmount = Number(req.paymentData?.TotalAmount) || convertedPrice;
+    const finalPrice = convertedPrice || paidAmount;
 
     const order = await orderCollection.insertOne({
       uid,
       orderId,
       service: slug,
       planId,
-      price: Number(plan?.price),
+      price: finalPrice,
       status: "Pending",
       createdBy: "User",
       assignedTo: null,
       tasks: [],
-      payment: req.paymentData.Status || "Pending",
-      paymentMethod: req.paymentData.FinancialEntity,
-      amount: Number(plan?.price),
+      payment: req.paymentData?.Status || "Pending",
+      paymentMethod: req.paymentData?.FinancialEntity,
+      amount: paidAmount,
       epsData: req.paymentData || null,
       createdAt: new Date(),
     });
@@ -207,16 +227,29 @@ export const getAllOrders = async (req, res) => {
               (p) => p.id?.toString() === order.planId?.toString(),
             );
             planName = plan?.planName || null;
-            planPrice = Number(plan?.price) || order.price || 0;
+            planPrice = order.price ?? Number(plan?.price) ?? 0;
           }
         }
 
         //assigned member
         let member = null;
         if (order.assignedTo) {
-          member = await teamCollection.findOne({
-            _id: new ObjectId(order.assignedTo),
-          });
+          if (ObjectId.isValid(order.assignedTo)) {
+            const userDoc = await userCollection.findOne({
+              _id: new ObjectId(order.assignedTo),
+            });
+            if (userDoc) {
+              member = {
+                memberName: userDoc.name || userDoc.displayName || userDoc.email,
+                email: userDoc.email,
+                role: userDoc.role,
+              };
+            } else {
+              member = await teamCollection.findOne({
+                _id: new ObjectId(order.assignedTo),
+              });
+            }
+          }
         }
 
         const effectivePrice = Number(planPrice) || 0;
@@ -236,6 +269,10 @@ export const getAllOrders = async (req, res) => {
           assignedTo: order.assignedTo,
           assignedMember: member?.memberName || null,
           tasks: order.tasks || [],
+          costs: order.costs || [],
+          totalCost:
+            order.totalCost ??
+            (order.costs?.reduce((a, b) => a + (Number(b.amount) || 0), 0) || 0),
           createdBy: order.createdBy,
           payment: order.payment,
           paymentMethod: order.paymentMethod,
@@ -301,24 +338,52 @@ export const getOrder = async (req, res) => {
       };
     } else {
       service = await serviceCollection.findOne({ slug: order.service });
-      plan = service
+      const rawPlan = service
         ? service.plans?.find(
             (p) => p.id?.toString() === order.planId?.toString(),
           )
+        : null;
+      plan = rawPlan
+        ? {
+            ...rawPlan,
+            price: order.price ?? rawPlan.price,
+            planPriceUSD: rawPlan.price,
+          }
         : null;
     }
 
     let member = {};
     if (order.assignedTo) {
-      member = await teamCollection.findOne({
-        _id: new ObjectId(order.assignedTo),
-      });
+      if (ObjectId.isValid(order.assignedTo)) {
+        const userDoc = await userCollection.findOne({
+          _id: new ObjectId(order.assignedTo),
+        });
+        if (userDoc) {
+          member = {
+            _id: userDoc._id,
+            memberName: userDoc.name || userDoc.displayName || userDoc.email,
+            email: userDoc.email,
+            role: userDoc.role,
+          };
+        } else {
+          const teamMember = await teamCollection.findOne({
+            _id: new ObjectId(order.assignedTo),
+          });
+          if (teamMember) {
+            member = teamMember;
+          }
+        }
+      }
     }
 
     res.status(200).json({
       success: true,
       order: {
         ...order,
+        costs: order.costs || [],
+        totalCost:
+          order.totalCost ??
+          (order.costs?.reduce((a, b) => a + (Number(b.amount) || 0), 0) || 0),
         user,
         service,
         plan,
@@ -365,7 +430,7 @@ export const updateOrder = async (req, res) => {
         (plan) => plan.id?.toString() === planId?.toString(),
       );
       if (planData?.price) {
-        price = Number(planData.price);
+        price = await convertToBDT(Number(planData.price));
       }
     }
 
@@ -452,9 +517,15 @@ export const updateOrder = async (req, res) => {
 
 //update order status
 export const updateOrderStatus = async (req, res) => {
-  const { orderId } = req.params;
+  const orderId = req.params.orderId || req.body.orderId;
   const { status } = req.body;
   try {
+    if (!orderId || !ObjectId.isValid(orderId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid or missing order ID" });
+    }
+
     const order = await orderCollection.findOne({ _id: new ObjectId(orderId) });
     if (!order) {
       return res
@@ -466,10 +537,10 @@ export const updateOrderStatus = async (req, res) => {
       { _id: new ObjectId(orderId) },
       { $set: { status } },
     );
-    if (result.modifiedCount === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Order not found or status unchanged",
+    if (result.modifiedCount === 0 && order.status === status) {
+      return res.status(200).json({
+        success: true,
+        message: "Order status is already up to date",
       });
     }
 
@@ -510,19 +581,33 @@ export const assignOrderToMember = async (req, res) => {
   console.log(id, assignedTo, tasks);
 
   try {
+    // Role check: Only admin can assign orders
+    if (req.user?.email) {
+      const caller = await userCollection.findOne({ email: req.user.email });
+      if (caller && caller.role !== "admin") {
+        return res.status(403).json({
+          success: false,
+          message: "Only administrators can assign orders",
+        });
+      }
+    }
+
     const formattedTasks = Array.isArray(tasks)
       ? tasks
           .filter((t) => t?.task && t.task.trim() !== "")
           .map((t) => ({
             task: t.task.trim(),
-            isCompleted: false,
+            isCompleted: Boolean(t.isCompleted),
           }))
       : [];
 
-    const updateDoc = {
-      assignedTo,
-      tasks: formattedTasks,
-    };
+    const updateDoc = {};
+    if (assignedTo !== undefined) {
+      updateDoc.assignedTo = assignedTo;
+    }
+    if (tasks !== undefined) {
+      updateDoc.tasks = formattedTasks;
+    }
 
     const result = await orderCollection.updateOne(
       { _id: new ObjectId(id) },
@@ -548,6 +633,271 @@ export const assignOrderToMember = async (req, res) => {
     res
       .status(500)
       .json({ success: false, message: "Failed to assign order to member" });
+  }
+};
+
+// Update tasks for an order (add, edit, toggle complete, delete tasks)
+export const updateOrderTasks = async (req, res) => {
+  const id = req.query.id || req.body.orderId || req.params.orderId;
+  const { tasks, assignedTo } = req.body;
+
+  if (!id) {
+    return res.status(400).json({
+      success: false,
+      message: "Order ID is required",
+    });
+  }
+
+  try {
+    const order = await orderCollection.findOne({ _id: new ObjectId(id) });
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    let caller = null;
+    if (req.user?.email) {
+      caller = await userCollection.findOne({ email: req.user.email });
+    }
+
+    const isAdmin = caller?.role === "admin";
+    const isMember = caller?.role === "member";
+
+    // If caller is authenticated as member (non-admin)
+    if (caller && !isAdmin) {
+      if (!isMember) {
+        return res.status(403).json({
+          success: false,
+          message: "Unauthorized to update tasks",
+        });
+      }
+
+      // Verify this project is assigned to caller
+      const callerIdStr = caller._id ? caller._id.toString() : "";
+      const isAssignedToCaller =
+        (order.assignedTo &&
+          (order.assignedTo.toString() === callerIdStr ||
+            order.assignedTo.toString() === caller.email ||
+            order.assignedTo.toString().toLowerCase() ===
+              (caller.name || "").toLowerCase())) ||
+        (order.assignedMemberEmail &&
+          order.assignedMemberEmail.toLowerCase() ===
+            caller.email.toLowerCase());
+
+      if (!isAssignedToCaller) {
+        return res.status(403).json({
+          success: false,
+          message: "You can only update tasks for projects assigned to you",
+        });
+      }
+
+      // Member cannot reassign
+      if (
+        assignedTo !== undefined &&
+        String(assignedTo) !== String(order.assignedTo)
+      ) {
+        return res.status(403).json({
+          success: false,
+          message: "Only administrators can reassign projects",
+        });
+      }
+
+      // Member can ONLY update isCompleted of existing tasks (cannot add/delete or change descriptions)
+      if (tasks !== undefined) {
+        const existingTasks = Array.isArray(order.tasks) ? order.tasks : [];
+        if (tasks.length !== existingTasks.length) {
+          return res.status(403).json({
+            success: false,
+            message:
+              "Only administrators can add or delete tasks. Members can only update completion status.",
+          });
+        }
+
+        // Only update isCompleted, preserving existing task text
+        const safeTasks = existingTasks.map((orig, i) => ({
+          task: orig.task,
+          isCompleted: Boolean(tasks[i]?.isCompleted),
+        }));
+
+        await orderCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { tasks: safeTasks } },
+        );
+
+        broadcastDashboardStats().catch((err) =>
+          console.error("Dashboard stats broadcast error:", err)
+        );
+
+        return res.status(200).json({
+          success: true,
+          message: "Task completion updated successfully",
+          tasks: safeTasks,
+        });
+      }
+    }
+
+    // Admin or unrestricted update
+    const updateDoc = {};
+
+    if (tasks !== undefined) {
+      const formattedTasks = Array.isArray(tasks)
+        ? tasks
+            .filter((t) => t?.task && String(t.task).trim() !== "")
+            .map((t) => ({
+              task: String(t.task).trim(),
+              isCompleted: Boolean(t.isCompleted),
+            }))
+        : [];
+      updateDoc.tasks = formattedTasks;
+    }
+
+    if (assignedTo !== undefined) {
+      updateDoc.assignedTo = assignedTo;
+    }
+
+    const result = await orderCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updateDoc },
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    // Real-time broadcast for dashboard stats
+    broadcastDashboardStats().catch((err) =>
+      console.error("Dashboard stats broadcast error:", err)
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Tasks updated successfully",
+      tasks: updateDoc.tasks,
+    });
+  } catch (error) {
+    console.error("Update order tasks error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update order tasks",
+    });
+  }
+};
+
+// Update order/project costs
+export const updateOrderCosts = async (req, res) => {
+  const { costs } = req.body;
+  const id = req.query.id || req.body.orderId;
+
+  try {
+    if (!id || !ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or missing order ID",
+      });
+    }
+
+    const order = await orderCollection.findOne({ _id: new ObjectId(id) });
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    let caller = null;
+    if (req.user?.email) {
+      caller = await userCollection.findOne({ email: req.user.email });
+    }
+
+    const isAdmin = caller?.role === "admin";
+    const isMember = caller?.role === "member";
+
+    if (!isAdmin) {
+      if (!isMember) {
+        return res.status(403).json({
+          success: false,
+          message: "Unauthorized to update project costs",
+        });
+      }
+
+      // Check if project is assigned to caller
+      const callerIdStr = caller?._id ? caller._id.toString() : "";
+      const isAssignedToCaller =
+        (order.assignedTo &&
+          (order.assignedTo.toString() === callerIdStr ||
+            order.assignedTo.toString() === caller.email ||
+            order.assignedTo.toString().toLowerCase() ===
+              (caller.name || "").toLowerCase())) ||
+        (order.assignedMemberEmail &&
+          order.assignedMemberEmail.toLowerCase() ===
+            (caller?.email || "").toLowerCase());
+
+      if (!isAssignedToCaller) {
+        return res.status(403).json({
+          success: false,
+          message: "You can only view and update costs for projects assigned to you",
+        });
+      }
+    }
+
+    // Format costs array
+    const formattedCosts = Array.isArray(costs)
+      ? costs
+          .filter((c) => c && c.title && String(c.title).trim() !== "")
+          .map((c) => ({
+            id:
+              c.id ||
+              `cost_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            title: String(c.title).trim(),
+            amount: Math.max(0, Number(c.amount) || 0),
+            note: c.note ? String(c.note).trim() : "",
+            date: c.date ? new Date(c.date) : new Date(),
+            addedBy:
+              c.addedBy ||
+              caller?.name ||
+              caller?.displayName ||
+              caller?.email ||
+              (isAdmin ? "Admin" : "Team Member"),
+          }))
+      : [];
+
+    const totalCost = formattedCosts.reduce(
+      (acc, curr) => acc + curr.amount,
+      0,
+    );
+
+    await orderCollection.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          costs: formattedCosts,
+          totalCost: totalCost,
+          updatedAt: new Date(),
+        },
+      },
+    );
+
+    broadcastDashboardStats().catch((err) =>
+      console.error("Dashboard stats broadcast error:", err),
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Costs updated successfully",
+      costs: formattedCosts,
+      totalCost,
+    });
+  } catch (error) {
+    console.error("Update order costs error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update order costs",
+    });
   }
 };
 

@@ -62,21 +62,21 @@ export const deleteClient = async (req, res) => {
         console.error("Dashboard stats broadcast error:", err)
       );
 
-      return res.send({
+      return res.status(200).json({
         success: true,
         message: "Client deleted successfully",
       });
     } else {
-      return res.send({
+      return res.status(404).json({
         success: false,
-        message: "Client not found in MongoDB",
+        message: "Client not found in database",
       });
     }
   } catch (error) {
     console.error("Delete error:", error);
     return res
       .status(500)
-      .send({ success: false, message: "Failed to delete Client" });
+      .json({ success: false, message: "Failed to delete Client" });
   }
 };
 

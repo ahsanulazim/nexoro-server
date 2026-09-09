@@ -187,7 +187,7 @@ export const getRecentOrders = async (req, res) => {
                 (p) => p.id?.toString() === order.planId?.toString(),
               );
               planName = plan?.planName || null;
-              planPrice = Number(plan?.price) || order.price || 0;
+              planPrice = order.price ?? Number(plan?.price) ?? 0;
             }
           } catch {}
         }
@@ -195,9 +195,22 @@ export const getRecentOrders = async (req, res) => {
         let member = null;
         if (order.assignedTo) {
           try {
-            member = await teamCollection.findOne({
-              _id: new ObjectId(order.assignedTo),
-            });
+            if (ObjectId.isValid(order.assignedTo)) {
+              const userDoc = await userCollection.findOne({
+                _id: new ObjectId(order.assignedTo),
+              });
+              if (userDoc) {
+                member = {
+                  memberName: userDoc.name || userDoc.displayName || userDoc.email,
+                  email: userDoc.email,
+                  role: userDoc.role,
+                };
+              } else {
+                member = await teamCollection.findOne({
+                  _id: new ObjectId(order.assignedTo),
+                });
+              }
+            }
           } catch {}
         }
 
@@ -218,6 +231,10 @@ export const getRecentOrders = async (req, res) => {
           assignedTo: order.assignedTo,
           assignedMember: member?.memberName || null,
           tasks: order.tasks || [],
+          costs: order.costs || [],
+          totalCost:
+            order.totalCost ??
+            (order.costs?.reduce((a, b) => a + (Number(b.amount) || 0), 0) || 0),
           createdBy: order.createdBy,
           payment: order.payment,
           paymentMethod: order.paymentMethod,
@@ -302,6 +319,39 @@ export const getRecentProjects = async (req, res) => {
             as: "teamMember",
           },
         },
+        // Lookup registered user from Users collection by matching _id with order.assignedTo
+        {
+          $lookup: {
+            from: "Users",
+            let: { assignedToId: "$assignedTo" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $ne: ["$$assignedToId", null] },
+                      { $ne: ["$$assignedToId", ""] },
+                      {
+                        $eq: [
+                          "$_id",
+                          {
+                            $convert: {
+                              input: "$$assignedToId",
+                              to: "objectId",
+                              onError: null,
+                              onNull: null,
+                            },
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                },
+              },
+            ],
+            as: "userMember",
+          },
+        },
         // Lookup client name from Clients collection (if clientId exists)
         {
           $lookup: {
@@ -341,11 +391,12 @@ export const getRecentProjects = async (req, res) => {
             as: "clientDoc",
           },
         },
-        // Extract matched service, member, and client
+        // Extract matched service, member, user, and client
         {
           $addFields: {
             matchedService: { $arrayElemAt: ["$serviceDoc", 0] },
             matchedMember: { $arrayElemAt: ["$teamMember", 0] },
+            matchedUser: { $arrayElemAt: ["$userMember", 0] },
             matchedClient: { $arrayElemAt: ["$clientDoc", 0] },
           },
         },
@@ -419,7 +470,10 @@ export const getRecentProjects = async (req, res) => {
             },
             price: 1,
             assignedTo: {
-              $ifNull: ["$matchedMember.memberName", null],
+              $ifNull: [
+                "$matchedUser.name",
+                { $ifNull: ["$matchedMember.memberName", null] },
+              ],
             },
             status: { $ifNull: ["$status", "Pending"] },
             payment: 1,
