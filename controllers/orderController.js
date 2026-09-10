@@ -175,16 +175,107 @@ export const confirmOrder = async (req, res) => {
 //get all orders
 export const getAllOrders = async (req, res) => {
   try {
-    // query থেকে page number নাও, default 1
     const page = parseInt(req.query.page) || 1;
-    const limit = 12; // প্রতি পেজে 12টা order
+    const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
+    const { status, search } = req.query;
 
-    // মোট order count বের করো
-    const totalOrders = await orderCollection.countDocuments();
+    const query = {};
+
+    // Status filter
+    if (status && status.toLowerCase() !== "all") {
+      query.status = { $regex: new RegExp(`^${status.trim()}$`, "i") };
+    }
+
+    // Search filter
+    if (search && search.trim()) {
+      const escapedSearch = search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const searchRegex = new RegExp(escapedSearch, "i");
+
+      // Match clients by name, email, company
+      const matchingClients = await clientCollection
+        .find({
+          $or: [
+            { name: { $regex: searchRegex } },
+            { email: { $regex: searchRegex } },
+            { company: { $regex: searchRegex } },
+          ],
+        })
+        .project({ _id: 1 })
+        .toArray();
+      const matchingClientIds = matchingClients.map((c) => c._id.toString());
+
+      // Match services by title or slug
+      const matchingServices = await serviceCollection
+        .find({
+          $or: [
+            { title: { $regex: searchRegex } },
+            { slug: { $regex: searchRegex } },
+          ],
+        })
+        .project({ slug: 1 })
+        .toArray();
+      const matchingServiceSlugs = matchingServices.map((s) => s.slug);
+
+      const orConditions = [
+        { orderId: { $regex: searchRegex } },
+        { service: { $regex: searchRegex } },
+        { serviceName: { $regex: searchRegex } },
+        { clientName: { $regex: searchRegex } },
+        { createdBy: { $regex: searchRegex } },
+        { payment: { $regex: searchRegex } },
+        { paymentMethod: { $regex: searchRegex } },
+        { "epsData.CustomerName": { $regex: searchRegex } },
+        { "epsData.CustomerEmail": { $regex: searchRegex } },
+        { "epsData.CustomerPhone": { $regex: searchRegex } },
+      ];
+
+      if (matchingClientIds.length > 0) {
+        orConditions.push({ clientId: { $in: matchingClientIds } });
+      }
+      if (matchingServiceSlugs.length > 0) {
+        orConditions.push({ service: { $in: matchingServiceSlugs } });
+      }
+      if (ObjectId.isValid(search.trim())) {
+        orConditions.push({ _id: new ObjectId(search.trim()) });
+      }
+
+      query.$or = orConditions;
+    }
+
+    // Total orders matching query
+    const totalOrders = await orderCollection.countDocuments(query);
+    const totalAllOrders = await orderCollection.countDocuments();
+
+    // Group counts for status tabs
+    const statusGroups = await orderCollection
+      .aggregate([
+        {
+          $group: {
+            _id: { $toLower: { $ifNull: ["$status", "pending"] } },
+            count: { $sum: 1 },
+          },
+        },
+      ])
+      .toArray();
+
+    const statusCounts = {
+      all: totalAllOrders,
+      completed: 0,
+      processing: 0,
+      pending: 0,
+      cancelled: 0,
+    };
+
+    statusGroups.forEach((g) => {
+      const key = g._id;
+      if (key in statusCounts) {
+        statusCounts[key] = g.count;
+      }
+    });
 
     const orders = await orderCollection
-      .find()
+      .find(query)
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
@@ -284,13 +375,15 @@ export const getAllOrders = async (req, res) => {
     res.status(200).json({
       success: true,
       orders: enrichedOrders,
+      statusCounts,
       pagination: {
         currentPage: page,
         totalPages: Math.ceil(totalOrders / limit),
         totalOrders,
+        limit,
         hasNext: page * limit < totalOrders,
         hasPrev: page > 1,
-        start: skip + 1,
+        start: totalOrders === 0 ? 0 : skip + 1,
         end: Math.min(skip + limit, totalOrders),
       },
     });
