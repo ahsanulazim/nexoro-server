@@ -236,6 +236,7 @@ export const getRecentOrders = async (req, res) => {
             order.totalCost ??
             (order.costs?.reduce((a, b) => a + (Number(b.amount) || 0), 0) || 0),
           createdBy: order.createdBy,
+          createdByRole: order.createdByRole || null,
           payment: order.payment,
           paymentMethod: order.paymentMethod,
           status: order.status || "Pending",

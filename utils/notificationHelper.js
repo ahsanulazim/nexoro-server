@@ -18,13 +18,22 @@ export const initNotificationTTL = async () => {
 };
 
 // Helper function to create notification in DB and emit to Socket.io
-export const createAndSendNotification = async ({ type, title, message, link }) => {
+export const createAndSendNotification = async ({
+  type,
+  title,
+  message,
+  link,
+  recipientId = null,
+  recipientRole = null,
+}) => {
   try {
     const notification = {
       type,
       title,
       message,
       link,
+      recipientId: recipientId ? recipientId.toString() : null,
+      recipientRole: recipientRole || (recipientId ? null : "admin"),
       isRead: false,
       createdAt: new Date(),
     };
@@ -35,8 +44,21 @@ export const createAndSendNotification = async ({ type, title, message, link }) 
       ...notification,
     };
 
-    // Emit live event to all connected admin sockets in the global admin room
-    io.to("admin_global_room").emit("newNotification", enrichedNotification);
+    // If targeted to a specific user/member
+    if (recipientId) {
+      const targetStr = recipientId.toString();
+      io.to(targetStr).emit("newNotification", enrichedNotification);
+      io.to(`user_${targetStr}`).emit("newNotification", enrichedNotification);
+    }
+
+    // If targeted to admin, staff, or broadcast
+    if (
+      notification.recipientRole === "admin" ||
+      notification.recipientRole === "staff" ||
+      notification.recipientRole === "all"
+    ) {
+      io.to("admin_global_room").emit("newNotification", enrichedNotification);
+    }
 
     return enrichedNotification;
   } catch (error) {
@@ -44,3 +66,4 @@ export const createAndSendNotification = async ({ type, title, message, link }) 
     return null;
   }
 };
+

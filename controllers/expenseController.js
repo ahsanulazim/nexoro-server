@@ -109,6 +109,12 @@ export const updateExpense = async (req, res) => {
     if (result.modifiedCount === 0) {
       return res.status(404).json({ message: "No expense found" });
     }
+
+    // Real-time broadcast for dashboard stats
+    broadcastDashboardStats().catch((err) =>
+      console.error("Dashboard stats broadcast error:", err)
+    );
+
     res.status(200).json(result);
   } catch (error) {
     res.status(500).json({ message: "Failed to update expense", error });

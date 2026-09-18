@@ -67,4 +67,4 @@ app.use("/expenses", expenseRouter);
 
 app.get("/", (req, res) => res.send("Hello World!"));
 
-server.listen(port, () => console.log(`Server running on port ${port}`));
+server.listen(port, () => console.log(`Server running on port ${port} [v2]`));

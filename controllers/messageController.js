@@ -2,6 +2,7 @@ import cloudinary from "../config/cloudinary.js";
 import client from "../config/db.js";
 import { io } from "../socket/socket.js";
 import { imageOptimizer } from "../utils/imageOptimizer.js";
+import { createAndSendNotification } from "../utils/notificationHelper.js";
 
 const msgCollection = client.db("nexoro").collection("Messages");
 const userCollection = client.db("nexoro").collection("Users");
@@ -23,10 +24,10 @@ export const sendMessage = async (req, res) => {
       email: decodedToken.email,
     });
 
-    const roomId =
-      senderUser.role === "admin"
-        ? `room_${receiverId}`
-        : `room_${senderUser._id}`;
+    const isStaff = senderUser.role === "admin" || senderUser.role === "member";
+    const roomId = isStaff
+      ? `room_${receiverId}`
+      : `room_${senderUser._id}`;
     let attachments = [];
 
     if (req.file) {
@@ -59,7 +60,7 @@ export const sendMessage = async (req, res) => {
       roomId,
       senderId: senderUser._id,
       senderRole: senderUser.role,
-      receiverId,
+      receiverId: isStaff ? receiverId : "admin",
       text,
       attachments,
       isRead: false,
@@ -87,7 +88,7 @@ export const sendMessage = async (req, res) => {
       {
         $set: { lastMessage: lastMessageText, updatedAt: new Date() },
         $setOnInsert: {
-          customerId: senderUser.role === "admin" ? receiverId : senderUser._id,
+          customerId: isStaff ? receiverId : senderUser._id,
           createdAt: new Date(),
         },
       },
@@ -111,6 +112,15 @@ export const sendMessage = async (req, res) => {
       io.to("admin_global_room").emit("updateUnreadCount", {
         roomId,
         count: unreadCount,
+      });
+
+      // Send message notification to staff (both admin and members)
+      await createAndSendNotification({
+        type: "new_message",
+        title: "New Message Received",
+        message: `You received a message from ${senderUser.email || "Customer"}: "${lastMessageText.length > 40 ? lastMessageText.substring(0, 37) + '...' : lastMessageText}"`,
+        link: `/dashboard/inbox/web/${senderUser._id}`,
+        recipientRole: "staff",
       });
     }
 

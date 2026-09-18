@@ -76,6 +76,31 @@ export const createOrder = async (req, res) => {
             : 0;
     }
 
+    // Determine creator info (Admin vs Member name)
+    let createdBy = req.body.createdBy || "Admin";
+    let createdByRole = req.body.createdByRole || "admin";
+    let createdById = req.body.createdById && ObjectId.isValid(req.body.createdById)
+      ? new ObjectId(req.body.createdById)
+      : null;
+
+    if (req.user?.email) {
+      const caller = await userCollection.findOne({ email: req.user.email });
+      if (caller) {
+        createdById = caller._id;
+        createdByRole = caller.role || "admin";
+        if (caller.role === "member") {
+          createdBy =
+            caller.name ||
+            caller.displayName ||
+            caller.email ||
+            req.body.createdBy ||
+            "Member";
+        } else if (caller.role === "admin") {
+          createdBy = caller.name || req.body.createdBy || "Admin";
+        }
+      }
+    }
+
     const order = await orderCollection.insertOne({
       clientId,
       orderId,
@@ -86,7 +111,9 @@ export const createOrder = async (req, res) => {
       price,
       discount: discountNum,
       status: "Pending",
-      createdBy: "Admin",
+      createdBy,
+      createdByRole,
+      createdById,
       assignedTo: null,
       tasks: [],
       amount: amountNum,
@@ -99,7 +126,7 @@ export const createOrder = async (req, res) => {
     await createAndSendNotification({
       type: "new_order",
       title: "New Order Placed",
-      message: `Order ${orderId} has been created for ${serviceTitle}.`,
+      message: `Order ${orderId} has been created for ${serviceTitle} by ${createdBy}.`,
       link: "/dashboard/orders",
     });
 
@@ -365,6 +392,7 @@ export const getAllOrders = async (req, res) => {
             order.totalCost ??
             (order.costs?.reduce((a, b) => a + (Number(b.amount) || 0), 0) || 0),
           createdBy: order.createdBy,
+          createdByRole: order.createdByRole || null,
           payment: order.payment,
           paymentMethod: order.paymentMethod,
           status: order.status || "Pending",
@@ -398,7 +426,16 @@ export const getOrder = async (req, res) => {
   const { id } = req.query;
 
   try {
-    const order = await orderCollection.findOne({ _id: new ObjectId(id) });
+    if (!id) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Order ID is required" });
+    }
+
+    const orderQuery = ObjectId.isValid(id)
+      ? { $or: [{ _id: new ObjectId(id) }, { orderId: id }] }
+      : { orderId: id };
+    const order = await orderCollection.findOne(orderQuery);
     if (!order) {
       return res
         .status(404)
@@ -507,7 +544,16 @@ export const updateOrder = async (req, res) => {
   } = req.body;
 
   try {
-    const order = await orderCollection.findOne({ _id: new ObjectId(orderId) });
+    if (!orderId) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Order ID is required" });
+    }
+
+    const orderQuery = ObjectId.isValid(orderId)
+      ? { $or: [{ _id: new ObjectId(orderId) }, { orderId }] }
+      : { orderId };
+    const order = await orderCollection.findOne(orderQuery);
     if (!order) {
       return res
         .status(404)
@@ -539,14 +585,13 @@ export const updateOrder = async (req, res) => {
       servicePrice: slug === "custom" ? price : null,
       price,
       discount: discountNum,
-      status,
       amount: amountNum,
       payment,
       paymentMethod,
     };
 
     const result = await orderCollection.updateOne(
-      { _id: new ObjectId(orderId) },
+      { _id: order._id },
       {
         $set: updateDoc,
       },
@@ -556,25 +601,6 @@ export const updateOrder = async (req, res) => {
         success: false,
         message: "Order not found",
       });
-    }
-
-    // Trigger notification if status changed
-    if (status && status !== order.status) {
-      if (status === "Completed") {
-        await createAndSendNotification({
-          type: "order_completed",
-          title: "Order Completed",
-          message: `Order ${order.orderId} has been marked as Completed.`,
-          link: "/dashboard/orders",
-        });
-      } else if (status === "Cancelled") {
-        await createAndSendNotification({
-          type: "order_cancelled",
-          title: "Order Cancelled",
-          message: `Order ${order.orderId} has been Cancelled.`,
-          link: "/dashboard/orders",
-        });
-      }
     }
 
     // Trigger notification if payment status changed
@@ -613,43 +639,81 @@ export const updateOrderStatus = async (req, res) => {
   const orderId = req.params.orderId || req.body.orderId;
   const { status } = req.body;
   try {
-    if (!orderId || !ObjectId.isValid(orderId)) {
+    if (!orderId) {
       return res
         .status(400)
         .json({ success: false, message: "Invalid or missing order ID" });
     }
 
-    const order = await orderCollection.findOne({ _id: new ObjectId(orderId) });
+    // Role check: Only admin or member can cancel an order
+    let caller = null;
+    if (req.user?.email) {
+      caller = await userCollection.findOne({
+        email: { $regex: new RegExp(`^${req.user.email}$`, "i") },
+      });
+    }
+    const isAdmin = caller?.role === "admin";
+    const isMember = caller?.role === "member";
+
+    if (!isAdmin && !isMember) {
+      return res.status(403).json({
+        success: false,
+        message: "Only administrators or members can cancel an order",
+      });
+    }
+
+    // Manual status update is strictly limited to cancellation
+    if (status !== "Cancelled") {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Order status is automated based on task assignment and completion. Only order cancellation is permitted manually.",
+      });
+    }
+
+    const orderQuery = ObjectId.isValid(orderId)
+      ? { $or: [{ _id: new ObjectId(orderId) }, { orderId }] }
+      : { orderId };
+    const order = await orderCollection.findOne(orderQuery);
     if (!order) {
       return res
         .status(404)
         .json({ success: false, message: "Order not found" });
     }
 
-    const result = await orderCollection.updateOne(
-      { _id: new ObjectId(orderId) },
-      { $set: { status } },
-    );
-    if (result.modifiedCount === 0 && order.status === status) {
+    if (order.status === "Cancelled") {
       return res.status(200).json({
         success: true,
-        message: "Order status is already up to date",
+        message: "Order is already cancelled",
       });
     }
 
-    if (status === "Completed") {
-      await createAndSendNotification({
-        type: "order_completed",
-        title: "Order Completed",
-        message: `Order ${order.orderId} has been marked as Completed.`,
-        link: "/dashboard/orders",
-      });
-    } else if (status === "Cancelled") {
+    await orderCollection.updateOne(
+      { _id: order._id },
+      { $set: { status: "Cancelled" } },
+    );
+
+    const cancellerName =
+      caller?.name ||
+      caller?.displayName ||
+      caller?.email ||
+      (isAdmin ? "Admin" : "Member");
+
+    await createAndSendNotification({
+      type: "order_cancelled",
+      title: "Order Cancelled",
+      message: `Order #${order.orderId || orderId} has been Cancelled by ${cancellerName}.`,
+      link: "/dashboard/orders",
+      recipientRole: "admin",
+    });
+
+    if (order.assignedTo) {
       await createAndSendNotification({
         type: "order_cancelled",
-        title: "Order Cancelled",
-        message: `Order ${order.orderId} has been Cancelled.`,
-        link: "/dashboard/orders",
+        title: "Project Cancelled",
+        message: `Your assigned order #${order.orderId || orderId} has been Cancelled by ${cancellerName}.`,
+        link: "/dashboard/projects",
+        recipientId: order.assignedTo,
       });
     }
 
@@ -658,7 +722,7 @@ export const updateOrderStatus = async (req, res) => {
       console.error("Dashboard stats broadcast error:", err)
     );
 
-    res.status(200).json({ success: true, message: "Order status updated" });
+    res.status(200).json({ success: true, message: "Order cancelled successfully" });
   } catch (error) {
     console.error("Update order status error:", error);
     res
@@ -669,20 +733,44 @@ export const updateOrderStatus = async (req, res) => {
 
 //assign order to a member
 export const assignOrderToMember = async (req, res) => {
-  const { id } = req.query;
+  const id = req.query.id || req.body.id || req.body.orderId;
   const { assignedTo, tasks } = req.body;
   console.log(id, assignedTo, tasks);
 
   try {
     // Role check: Only admin can assign orders
     if (req.user?.email) {
-      const caller = await userCollection.findOne({ email: req.user.email });
+      const caller = await userCollection.findOne({
+        email: { $regex: new RegExp(`^${req.user.email}$`, "i") },
+      });
       if (caller && caller.role !== "admin") {
         return res.status(403).json({
           success: false,
           message: "Only administrators can assign orders",
         });
       }
+    }
+
+    if (!id) {
+      return res.status(400).json({ success: false, message: "Order ID is required" });
+    }
+
+    const orderQuery = ObjectId.isValid(id)
+      ? { $or: [{ _id: new ObjectId(id) }, { orderId: id }] }
+      : { orderId: id };
+    const order = await orderCollection.findOne(orderQuery);
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    if (order.status === "Cancelled") {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot assign tasks to a cancelled order",
+      });
     }
 
     const formattedTasks = Array.isArray(tasks)
@@ -702,15 +790,63 @@ export const assignOrderToMember = async (req, res) => {
       updateDoc.tasks = formattedTasks;
     }
 
+    const currentTasks =
+      tasks !== undefined
+        ? formattedTasks
+        : Array.isArray(order.tasks)
+          ? order.tasks
+          : [];
+    const currentAssignedTo =
+      assignedTo !== undefined ? assignedTo : order.assignedTo;
+
+    // Dynamic status determination:
+    let dynamicStatus = "Pending";
+    if (
+      currentTasks.length > 0 &&
+      currentTasks.every((t) => t.isCompleted === true)
+    ) {
+      dynamicStatus = "Completed";
+    } else if (currentAssignedTo || currentTasks.length > 0) {
+      dynamicStatus = "Processing";
+    } else {
+      dynamicStatus = "Pending";
+    }
+    updateDoc.status = dynamicStatus;
+
     const result = await orderCollection.updateOne(
-      { _id: new ObjectId(id) },
+      { _id: order._id },
       { $set: updateDoc },
     );
-    if (result.matchedCount === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Order not found",
+
+    // Send project assignment notification to the assigned member
+    if (assignedTo) {
+      let serviceTitle = order?.service || "Project";
+      if (order?.service && order.service !== "custom") {
+        const service = await serviceCollection.findOne({ slug: order.service });
+        if (service?.title) serviceTitle = service.title;
+      } else if (order?.serviceName) {
+        serviceTitle = order.serviceName;
+      }
+
+      await createAndSendNotification({
+        type: "project_assigned",
+        title: "New Project Assigned",
+        message: `You have been assigned to order #${order?.orderId || id} (${serviceTitle}).`,
+        link: "/dashboard/projects",
+        recipientId: assignedTo,
       });
+    }
+
+    if (dynamicStatus !== order.status) {
+      if (dynamicStatus === "Completed") {
+        await createAndSendNotification({
+          type: "order_completed",
+          title: "Order Completed",
+          message: `Order #${order.orderId || id} has been marked as Completed.`,
+          link: "/dashboard/orders",
+          recipientRole: "admin",
+        });
+      }
     }
 
     // Real-time broadcast for dashboard stats (assigned vs pending projects updated)
@@ -720,7 +856,7 @@ export const assignOrderToMember = async (req, res) => {
 
     res
       .status(200)
-      .json({ success: true, message: "Order assigned to member with tasks" });
+      .json({ success: true, message: "Order assigned to member with tasks", status: dynamicStatus });
   } catch (error) {
     console.error("Assign order to member error:", error);
     res
@@ -742,7 +878,10 @@ export const updateOrderTasks = async (req, res) => {
   }
 
   try {
-    const order = await orderCollection.findOne({ _id: new ObjectId(id) });
+    const orderQuery = ObjectId.isValid(id)
+      ? { $or: [{ _id: new ObjectId(id) }, { orderId: id }] }
+      : { orderId: id };
+    const order = await orderCollection.findOne(orderQuery);
     if (!order) {
       return res.status(404).json({
         success: false,
@@ -752,7 +891,16 @@ export const updateOrderTasks = async (req, res) => {
 
     let caller = null;
     if (req.user?.email) {
-      caller = await userCollection.findOne({ email: req.user.email });
+      caller = await userCollection.findOne({
+        email: { $regex: new RegExp(`^${req.user.email}$`, "i") },
+      });
+    }
+
+    if (order.status === "Cancelled") {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot update tasks on a cancelled order",
+      });
     }
 
     const isAdmin = caller?.role === "admin";
@@ -797,6 +945,13 @@ export const updateOrderTasks = async (req, res) => {
         });
       }
 
+      if (order.status === "Cancelled") {
+        return res.status(400).json({
+          success: false,
+          message: "Cannot update tasks on a cancelled order.",
+        });
+      }
+
       // Member can ONLY update isCompleted of existing tasks (cannot add/delete or change descriptions)
       if (tasks !== undefined) {
         const existingTasks = Array.isArray(order.tasks) ? order.tasks : [];
@@ -814,10 +969,43 @@ export const updateOrderTasks = async (req, res) => {
           isCompleted: Boolean(tasks[i]?.isCompleted),
         }));
 
+        const allCompleted =
+          safeTasks.length > 0 && safeTasks.every((t) => t.isCompleted === true);
+        const newStatus = allCompleted ? "Completed" : "Processing";
+
         await orderCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { tasks: safeTasks } },
+          { _id: order._id },
+          { $set: { tasks: safeTasks, status: newStatus } },
         );
+
+        if (newStatus !== order.status) {
+          if (newStatus === "Completed") {
+            await createAndSendNotification({
+              type: "order_completed",
+              title: "Order Completed",
+              message: `Order #${order.orderId || id} has been marked as Completed because all tasks are finished.`,
+              link: "/dashboard/orders",
+              recipientRole: "admin",
+            });
+            if (order.assignedTo) {
+              await createAndSendNotification({
+                type: "order_completed",
+                title: "Project Completed",
+                message: `Your assigned order #${order.orderId || id} has been marked as Completed.`,
+                link: "/dashboard/projects",
+                recipientId: order.assignedTo,
+              });
+            }
+          } else if (newStatus === "Processing" && order.status === "Completed") {
+            await createAndSendNotification({
+              type: "order_status_updated",
+              title: "Order Reopened",
+              message: `Order #${order.orderId || id} status changed back to Processing as tasks are incomplete.`,
+              link: "/dashboard/orders",
+              recipientRole: "admin",
+            });
+          }
+        }
 
         broadcastDashboardStats().catch((err) =>
           console.error("Dashboard stats broadcast error:", err)
@@ -827,6 +1015,7 @@ export const updateOrderTasks = async (req, res) => {
           success: true,
           message: "Task completion updated successfully",
           tasks: safeTasks,
+          status: newStatus,
         });
       }
     }
@@ -850,8 +1039,31 @@ export const updateOrderTasks = async (req, res) => {
       updateDoc.assignedTo = assignedTo;
     }
 
+    const currentTasks =
+      updateDoc.tasks !== undefined
+        ? updateDoc.tasks
+        : Array.isArray(order.tasks)
+          ? order.tasks
+          : [];
+    const currentAssignedTo =
+      updateDoc.assignedTo !== undefined ? updateDoc.assignedTo : order.assignedTo;
+
+    // Dynamic status determination:
+    let dynamicStatus = "Pending";
+    if (
+      currentTasks.length > 0 &&
+      currentTasks.every((t) => t.isCompleted === true)
+    ) {
+      dynamicStatus = "Completed";
+    } else if (currentAssignedTo || currentTasks.length > 0) {
+      dynamicStatus = "Processing";
+    } else {
+      dynamicStatus = "Pending";
+    }
+    updateDoc.status = dynamicStatus;
+
     const result = await orderCollection.updateOne(
-      { _id: new ObjectId(id) },
+      { _id: order._id },
       { $set: updateDoc },
     );
 
@@ -860,6 +1072,60 @@ export const updateOrderTasks = async (req, res) => {
         success: false,
         message: "Order not found",
       });
+    }
+
+    // Trigger notification if status changed to Completed
+    if (dynamicStatus !== order.status) {
+      if (dynamicStatus === "Completed") {
+        await createAndSendNotification({
+          type: "order_completed",
+          title: "Order Completed",
+          message: `Order #${order.orderId || id} has been marked as Completed.`,
+          link: "/dashboard/orders",
+          recipientRole: "admin",
+        });
+        const target = updateDoc.assignedTo || order.assignedTo;
+        if (target) {
+          await createAndSendNotification({
+            type: "order_completed",
+            title: "Project Completed",
+            message: `Your assigned order #${order.orderId || id} has been marked as Completed.`,
+            link: "/dashboard/projects",
+            recipientId: target,
+          });
+        }
+      }
+    }
+
+    // Notify assigned member if newly assigned or tasks were updated
+    const targetMember = assignedTo || order.assignedTo;
+    if (isAdmin && targetMember) {
+      const isNewAssignment = assignedTo && String(assignedTo) !== String(order.assignedTo);
+      if (isNewAssignment) {
+        let serviceTitle = order?.service || "Project";
+        if (order?.service && order.service !== "custom") {
+          const service = await serviceCollection.findOne({ slug: order.service });
+          if (service?.title) serviceTitle = service.title;
+        } else if (order?.serviceName) {
+          serviceTitle = order.serviceName;
+        }
+
+        await createAndSendNotification({
+          type: "project_assigned",
+          title: "New Project Assigned",
+          message: `You have been assigned to order #${order.orderId || id} (${serviceTitle}).`,
+          link: "/dashboard/projects",
+          recipientId: assignedTo,
+        });
+      } else if (tasks !== undefined) {
+        await createAndSendNotification({
+          type: "order_tasks_updated",
+          title: "Tasks Updated",
+          message: `Tasks have been updated for your assigned order #${order.orderId || id}.`,
+          link: "/dashboard/projects",
+          recipientId: targetMember,
+        });
+      }
     }
 
     // Real-time broadcast for dashboard stats
@@ -871,6 +1137,7 @@ export const updateOrderTasks = async (req, res) => {
       success: true,
       message: "Tasks updated successfully",
       tasks: updateDoc.tasks,
+      status: dynamicStatus,
     });
   } catch (error) {
     console.error("Update order tasks error:", error);
@@ -887,14 +1154,17 @@ export const updateOrderCosts = async (req, res) => {
   const id = req.query.id || req.body.orderId;
 
   try {
-    if (!id || !ObjectId.isValid(id)) {
+    if (!id) {
       return res.status(400).json({
         success: false,
         message: "Invalid or missing order ID",
       });
     }
 
-    const order = await orderCollection.findOne({ _id: new ObjectId(id) });
+    const orderQuery = ObjectId.isValid(id)
+      ? { $or: [{ _id: new ObjectId(id) }, { orderId: id }] }
+      : { orderId: id };
+    const order = await orderCollection.findOne(orderQuery);
     if (!order) {
       return res.status(404).json({
         success: false,
@@ -904,7 +1174,9 @@ export const updateOrderCosts = async (req, res) => {
 
     let caller = null;
     if (req.user?.email) {
-      caller = await userCollection.findOne({ email: req.user.email });
+      caller = await userCollection.findOne({
+        email: { $regex: new RegExp(`^${req.user.email}$`, "i") },
+      });
     }
 
     const isAdmin = caller?.role === "admin";
@@ -965,7 +1237,7 @@ export const updateOrderCosts = async (req, res) => {
     );
 
     await orderCollection.updateOne(
-      { _id: new ObjectId(id) },
+      { _id: order._id },
       {
         $set: {
           costs: formattedCosts,
@@ -999,9 +1271,10 @@ export const deleteOrder = async (req, res) => {
   const { orderId } = req.params;
 
   try {
-    const result = await orderCollection.deleteOne({
-      _id: new ObjectId(orderId),
-    });
+    const orderQuery = ObjectId.isValid(orderId)
+      ? { $or: [{ _id: new ObjectId(orderId) }, { orderId }] }
+      : { orderId };
+    const result = await orderCollection.deleteOne(orderQuery);
     if (result.deletedCount === 0) {
       return res
         .status(404)

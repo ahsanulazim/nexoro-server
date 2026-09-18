@@ -32,7 +32,7 @@ io.use(async (socket, next) => {
     //role check from mongodb users collection
     const user = await userCollection.findOne({ email });
 
-    if (!user || !["admin", "customer"].includes(user.role)) {
+    if (!user || !["admin", "customer", "member"].includes(user.role)) {
       return next(new Error("Unauthorized: Invalid user role"));
     }
 
@@ -48,6 +48,7 @@ io.use(async (socket, next) => {
 //Connection open
 io.on("connection", async (socket) => {
   const { email, role, _id } = socket.user;
+  const isStaff = role === "admin" || role === "member";
 
   console.log(`A user connected: ${email} (${role}), ID: ${_id} `);
   const msgCollection = client.db("nexoro").collection("Messages");
@@ -66,9 +67,12 @@ io.on("connection", async (socket) => {
     console.log("Error in setting user online:", error);
   }
 
-  if (role === "admin") {
+  // Everyone joins their own personal room by ID for targeted notifications
+  socket.join(_id.toString());
+  socket.join(`user_${_id}`);
+
+  if (isStaff) {
     socket.join(ADMIN_ROOM);
-    socket.join(_id);
     socket.emit("getOnlineCustomers", Array.from(onlineCustomers));
 
     try {
@@ -96,12 +100,14 @@ io.on("connection", async (socket) => {
     }
 
     // Send initial real-time dashboard stats to admin on connect
-    try {
-      const { getLatestDashboardStats } = await import("../utils/dashboardHelper.js");
-      const initialStats = await getLatestDashboardStats();
-      socket.emit("dashboardStatsUpdate", initialStats);
-    } catch (error) {
-      console.log("Error in sending initial dashboard stats:", error);
+    if (role === "admin") {
+      try {
+        const { getLatestDashboardStats } = await import("../utils/dashboardHelper.js");
+        const initialStats = await getLatestDashboardStats();
+        socket.emit("dashboardStatsUpdate", initialStats);
+      } catch (error) {
+        console.log("Error in sending initial dashboard stats:", error);
+      }
     }
   } else {
     socket.join(`room_${_id}`);
@@ -110,13 +116,13 @@ io.on("connection", async (socket) => {
   socket.on("sendMessage", async (data) => {
     const { text, receiverId, replyTo } = data;
 
-    const roomId = role === "admin" ? `room_${receiverId}` : `room_${_id}`;
+    const roomId = isStaff ? `room_${receiverId}` : `room_${_id}`;
 
     const messageData = {
       roomId,
       senderId: _id,
       senderRole: role,
-      receiverId,
+      receiverId: isStaff ? receiverId : "admin",
       text,
       attachments: [],
       isRead: false,
@@ -145,7 +151,7 @@ io.on("connection", async (socket) => {
           updatedAt: new Date(),
         },
         $setOnInsert: {
-          customerId: role === "admin" ? receiverId : _id,
+          customerId: isStaff ? receiverId : _id,
           createdAt: new Date(),
         },
       },
@@ -168,12 +174,13 @@ io.on("connection", async (socket) => {
       });
       io.to(ADMIN_ROOM).emit("updateUnreadCount", { roomId, count: unreadCount });
 
-      // Create message notification for admin
+      // Create message notification for staff (admin & members)
       await createAndSendNotification({
         type: "new_message",
         title: "New Message Received",
         message: `You received a message from ${email || "Customer"}: "${text.length > 40 ? text.substring(0, 37) + '...' : text}"`,
         link: `/dashboard/inbox/web/${_id}`,
+        recipientRole: "staff",
       });
     }
   });
@@ -186,7 +193,7 @@ io.on("connection", async (socket) => {
     );
     io.to(roomId).emit("messagesRead", { roomId });
 
-    if (role === "admin") {
+    if (isStaff) {
       io.to(ADMIN_ROOM).emit("updateUnreadCount", { roomId, count: 0 });
     }
   });

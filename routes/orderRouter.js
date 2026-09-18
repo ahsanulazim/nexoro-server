@@ -16,13 +16,13 @@ import { verifyId } from "../middleware/verifyId.js";
 const router = express.Router();
 
 //Routes
-router.post("/createOrder", createOrder);
+router.post("/createOrder", verifyId, createOrder);
 router.put("/updateOrder", updateOrder);
 router.get("/getAllOrders", getAllOrders);
 router.get("/getOrder", getOrder);
 router.get("/countries", getAllCountries);
-router.put("/updateOrderStatus/:orderId", updateOrderStatus);
-router.put("/updateOrderStatus", updateOrderStatus);
+router.put("/updateOrderStatus/:orderId", verifyId, updateOrderStatus);
+router.put("/updateOrderStatus", verifyId, updateOrderStatus);
 router.put("/assignOrderToMember", verifyId, assignOrderToMember);
 router.put("/updateTasks", verifyId, updateOrderTasks);
 router.put("/updateCosts", verifyId, updateOrderCosts);

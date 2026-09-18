@@ -4,12 +4,12 @@ import {
   markAsRead,
   markAllAsRead,
 } from "../controllers/notificationController.js";
-import { verifyAdmin } from "../middleware/verifyAdmin.js";
+import { verifyId } from "../middleware/verifyId.js";
 
 const notificationRouter = Router();
 
-// Protect all routes with verifyAdmin middleware
-notificationRouter.use(verifyAdmin);
+// Protect all routes with verifyId middleware
+notificationRouter.use(verifyId);
 
 notificationRouter.get("/", getNotifications);
 notificationRouter.patch("/mark-all-read", markAllAsRead);
