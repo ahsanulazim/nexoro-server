@@ -37,6 +37,7 @@ export const createOrder = async (req, res) => {
     payment,
     paymentMethod,
     amount,
+    deadline,
   } = req.body;
 
   try {
@@ -82,10 +83,12 @@ export const createOrder = async (req, res) => {
     let createdById = req.body.createdById && ObjectId.isValid(req.body.createdById)
       ? new ObjectId(req.body.createdById)
       : null;
+    let callerUser = null;
 
     if (req.user?.email) {
       const caller = await userCollection.findOne({ email: req.user.email });
       if (caller) {
+        callerUser = caller;
         createdById = caller._id;
         createdByRole = caller.role || "admin";
         if (caller.role === "member") {
@@ -101,6 +104,29 @@ export const createOrder = async (req, res) => {
       }
     }
 
+    // Determine initial assignment (self-assign for member, or assignment by admin)
+    let initialAssignedTo = null;
+    const shouldSelfAssign =
+      req.body.assignToSelf === true || req.body.assignToSelf === "true";
+
+    if (callerUser?.role === "member") {
+      if (
+        shouldSelfAssign ||
+        (req.body.assignedTo &&
+          String(req.body.assignedTo) === callerUser._id.toString())
+      ) {
+        initialAssignedTo = callerUser._id.toString();
+      }
+    } else if (callerUser?.role === "admin") {
+      if (shouldSelfAssign) {
+        initialAssignedTo = callerUser._id.toString();
+      } else if (req.body.assignedTo) {
+        initialAssignedTo = req.body.assignedTo.toString();
+      }
+    }
+
+    const initialStatus = initialAssignedTo ? "Processing" : "Pending";
+
     const order = await orderCollection.insertOne({
       clientId,
       orderId,
@@ -110,15 +136,16 @@ export const createOrder = async (req, res) => {
       planId: slug === "custom" ? null : planId,
       price,
       discount: discountNum,
-      status: "Pending",
+      status: initialStatus,
       createdBy,
       createdByRole,
       createdById,
-      assignedTo: null,
+      assignedTo: initialAssignedTo,
       tasks: [],
       amount: amountNum,
       payment,
       paymentMethod,
+      deadline: deadline ? new Date(deadline) : null,
       createdAt: new Date(),
     });
 
@@ -129,6 +156,17 @@ export const createOrder = async (req, res) => {
       message: `Order ${orderId} has been created for ${serviceTitle} by ${createdBy}.`,
       link: "/dashboard/orders",
     });
+
+    // If order was assigned on creation, send project assignment notification
+    if (initialAssignedTo) {
+      await createAndSendNotification({
+        type: "project_assigned",
+        title: "New Project Assigned",
+        message: `You have been assigned to order #${orderId} (${serviceTitle}).`,
+        link: "/dashboard/projects",
+        recipientId: initialAssignedTo,
+      });
+    }
 
     // Real-time broadcast for dashboard stats
     broadcastDashboardStats().catch((err) =>
@@ -393,10 +431,12 @@ export const getAllOrders = async (req, res) => {
             (order.costs?.reduce((a, b) => a + (Number(b.amount) || 0), 0) || 0),
           createdBy: order.createdBy,
           createdByRole: order.createdByRole || null,
+          createdById: order.createdById ? order.createdById.toString() : null,
           payment: order.payment,
           paymentMethod: order.paymentMethod,
           status: order.status || "Pending",
           createdAt: order.createdAt,
+          deadline: order.deadline || null,
         };
       }),
     );
@@ -541,6 +581,7 @@ export const updateOrder = async (req, res) => {
     amount,
     payment,
     paymentMethod,
+    deadline,
   } = req.body;
 
   try {
@@ -588,6 +629,9 @@ export const updateOrder = async (req, res) => {
       amount: amountNum,
       payment,
       paymentMethod,
+      ...(deadline !== undefined && {
+        deadline: deadline ? new Date(deadline) : null,
+      }),
     };
 
     const result = await orderCollection.updateOne(
@@ -738,19 +782,6 @@ export const assignOrderToMember = async (req, res) => {
   console.log(id, assignedTo, tasks);
 
   try {
-    // Role check: Only admin can assign orders
-    if (req.user?.email) {
-      const caller = await userCollection.findOne({
-        email: { $regex: new RegExp(`^${req.user.email}$`, "i") },
-      });
-      if (caller && caller.role !== "admin") {
-        return res.status(403).json({
-          success: false,
-          message: "Only administrators can assign orders",
-        });
-      }
-    }
-
     if (!id) {
       return res.status(400).json({ success: false, message: "Order ID is required" });
     }
@@ -771,6 +802,61 @@ export const assignOrderToMember = async (req, res) => {
         success: false,
         message: "Cannot assign tasks to a cancelled order",
       });
+    }
+
+    // Role check: Only admin can assign any member; Member can only assign themselves to orders they created
+    if (req.user?.email) {
+      const caller = await userCollection.findOne({
+        email: { $regex: new RegExp(`^${req.user.email}$`, "i") },
+      });
+
+      if (!caller) {
+        return res.status(401).json({
+          success: false,
+          message: "User not found",
+        });
+      }
+
+      const isAdmin = caller.role === "admin";
+      const isMember = caller.role === "member";
+
+      if (!isAdmin) {
+        if (!isMember) {
+          return res.status(403).json({
+            success: false,
+            message: "Only administrators and members can assign orders",
+          });
+        }
+
+        const callerIdStr = caller._id ? caller._id.toString() : "";
+        const callerEmail = (caller.email || "").toLowerCase();
+        const callerName = (caller.name || caller.displayName || "").toLowerCase();
+
+        const isCreator =
+          (order.createdById && order.createdById.toString() === callerIdStr) ||
+          (order.createdBy &&
+            (order.createdBy.toLowerCase() === callerName ||
+              order.createdBy.toLowerCase() === callerEmail));
+
+        if (!isCreator) {
+          return res.status(403).json({
+            success: false,
+            message: "Members can only assign orders they created",
+          });
+        }
+
+        const isSelfAssign =
+          String(assignedTo) === callerIdStr ||
+          String(assignedTo).toLowerCase() === callerEmail ||
+          String(assignedTo).toLowerCase() === callerName;
+
+        if (!isSelfAssign) {
+          return res.status(403).json({
+            success: false,
+            message: "Members can only assign themselves to orders they created",
+          });
+        }
+      }
     }
 
     const formattedTasks = Array.isArray(tasks)
@@ -952,22 +1038,36 @@ export const updateOrderTasks = async (req, res) => {
         });
       }
 
-      // Member can ONLY update isCompleted of existing tasks (cannot add/delete or change descriptions)
+      const callerEmail = (caller.email || "").toLowerCase();
+      const callerName = (caller.name || caller.displayName || "").toLowerCase();
+      const isCreator =
+        (order.createdById && order.createdById.toString() === callerIdStr) ||
+        (order.createdBy &&
+          (order.createdBy.toLowerCase() === callerName ||
+            order.createdBy.toLowerCase() === callerEmail));
+
+      // Non-creator members can ONLY update isCompleted of existing tasks
       if (tasks !== undefined) {
         const existingTasks = Array.isArray(order.tasks) ? order.tasks : [];
-        if (tasks.length !== existingTasks.length) {
+        if (!isCreator && tasks.length !== existingTasks.length) {
           return res.status(403).json({
             success: false,
             message:
-              "Only administrators can add or delete tasks. Members can only update completion status.",
+              "Only administrators or order creators can add or delete tasks. Assigned members can only update completion status.",
           });
         }
 
-        // Only update isCompleted, preserving existing task text
-        const safeTasks = existingTasks.map((orig, i) => ({
-          task: orig.task,
-          isCompleted: Boolean(tasks[i]?.isCompleted),
-        }));
+        const safeTasks = isCreator
+          ? tasks
+              .filter((t) => t?.task && String(t.task).trim() !== "")
+              .map((t) => ({
+                task: String(t.task).trim(),
+                isCompleted: Boolean(t.isCompleted),
+              }))
+          : existingTasks.map((orig, i) => ({
+              task: orig.task,
+              isCompleted: Boolean(tasks[i]?.isCompleted),
+            }));
 
         const allCompleted =
           safeTasks.length > 0 && safeTasks.every((t) => t.isCompleted === true);
@@ -1271,6 +1371,18 @@ export const deleteOrder = async (req, res) => {
   const { orderId } = req.params;
 
   try {
+    // Defense-in-depth: Only admins can delete orders
+    if (req.user?.email) {
+      const caller = await userCollection.findOne({
+        email: { $regex: new RegExp(`^${req.user.email}$`, "i") },
+      });
+      if (caller?.role !== "admin") {
+        return res
+          .status(403)
+          .json({ success: false, message: "Only administrators can delete orders" });
+      }
+    }
+
     const orderQuery = ObjectId.isValid(orderId)
       ? { $or: [{ _id: new ObjectId(orderId) }, { orderId }] }
       : { orderId };
@@ -1312,3 +1424,150 @@ export const getAllCountries = async (req, res) => {
       .json({ success: false, message: "Failed to fetch countries" });
   }
 };
+
+// Get orders belonging specifically to the logged-in customer
+export const getMyOrders = async (req, res) => {
+  try {
+    const userEmail = req.user?.email?.toLowerCase();
+    const uid = req.user?.uid;
+
+    if (!userEmail && !uid) {
+      return res.status(401).json({ success: false, message: "User credentials missing" });
+    }
+
+    // Match client documents by email if any
+    let clientIds = [];
+    if (userEmail) {
+      const matchingClients = await clientCollection
+        .find({ email: { $regex: new RegExp(`^${userEmail.trim()}$`, "i") } })
+        .project({ _id: 1 })
+        .toArray();
+      clientIds = matchingClients.map((c) => c._id.toString());
+    }
+
+    const orConditions = [];
+    if (uid) orConditions.push({ uid });
+    if (userEmail) {
+      orConditions.push({ "epsData.CustomerEmail": { $regex: new RegExp(`^${userEmail.trim()}$`, "i") } });
+      orConditions.push({ "clientEmail": { $regex: new RegExp(`^${userEmail.trim()}$`, "i") } });
+    }
+    if (clientIds.length > 0) {
+      orConditions.push({ clientId: { $in: clientIds } });
+    }
+
+    const query = orConditions.length > 0 ? { $or: orConditions } : {};
+    const orders = await orderCollection
+      .find(query)
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    const stats = {
+      total: orders.length,
+      pending: orders.filter((o) => (o.status || "").toLowerCase() === "pending").length,
+      processing: orders.filter((o) => (o.status || "").toLowerCase() === "processing").length,
+      completed: orders.filter((o) => (o.status || "").toLowerCase() === "completed").length,
+      cancelled: orders.filter((o) => (o.status || "").toLowerCase() === "cancelled").length,
+      totalSpent: orders
+        .filter((o) => o.payment === "Success")
+        .reduce((sum, o) => sum + (Number(o.amount) || Number(o.price) || 0), 0),
+      totalDue: orders.reduce((sum, o) => {
+        const p = Number(o.price) || 0;
+        const d = Number(o.discount) || 0;
+        const a = Number(o.amount) || 0;
+        const due = p - d - a;
+        return sum + (due > 0 && o.payment !== "Success" ? due : 0);
+      }, 0),
+    };
+
+    const enrichedOrders = await Promise.all(
+      orders.map(async (order) => {
+        let serviceTitle = order.service;
+        let planName = null;
+        let planPrice = order.price || 0;
+
+        if (order.service === "custom") {
+          serviceTitle = order.serviceName || "Custom Service";
+          planName = "Custom Plan";
+          planPrice = order.servicePrice || order.price || 0;
+        } else {
+          const service = await serviceCollection.findOne({ slug: order.service });
+          if (service) {
+            serviceTitle = service.title;
+            const plan = service.plans?.find(
+              (p) => p.id?.toString() === order.planId?.toString(),
+            );
+            planName = plan?.planName || null;
+            planPrice = order.price ?? Number(plan?.price) ?? 0;
+          }
+        }
+
+        let assignedMember = null;
+        if (order.assignedTo) {
+          if (ObjectId.isValid(order.assignedTo)) {
+            const userDoc = await userCollection.findOne({
+              _id: new ObjectId(order.assignedTo),
+            });
+            if (userDoc) {
+              assignedMember = userDoc.name || userDoc.displayName || userDoc.email;
+            } else {
+              const teamDoc = await teamCollection.findOne({
+                _id: new ObjectId(order.assignedTo),
+              });
+              if (teamDoc) assignedMember = teamDoc.memberName;
+            }
+          }
+        }
+
+        const effectivePrice = Number(planPrice) || 0;
+        const discountVal = Number(order.discount) || 0;
+        const amountVal = Number(order.amount) || 0;
+        const dueAmount = effectivePrice - discountVal - amountVal;
+
+        const tasks = order.tasks || [];
+        const totalTasks = tasks.length;
+        const completedTasks = tasks.filter((t) => t.completed).length;
+        const progressPercent =
+          totalTasks > 0
+            ? Math.round((completedTasks / totalTasks) * 100)
+            : order.status === "Completed"
+              ? 100
+              : order.status === "Processing"
+                ? 50
+                : 15;
+
+        return {
+          _id: order._id.toString(),
+          orderId: order._id.toString(),
+          orderUid: order.orderId || `ORD-${order._id.toString().slice(-6).toUpperCase()}`,
+          serviceTitle,
+          serviceSlug: order.service,
+          planName,
+          price: effectivePrice,
+          discount: discountVal,
+          amount: amountVal,
+          dueAmount: dueAmount > 0 && order.payment !== "Success" ? dueAmount : 0,
+          assignedMember,
+          tasks,
+          progressPercent,
+          payment: order.payment || "Pending",
+          paymentMethod: order.paymentMethod || "EPS",
+          status: order.status || "Pending",
+          createdAt: order.createdAt,
+          deadline: order.deadline || null,
+          epsData: order.epsData || null,
+          userName: req.user?.name || req.user?.displayName || order.epsData?.CustomerName || "Customer",
+        };
+      }),
+    );
+
+    return res.status(200).json({
+      success: true,
+      orders: enrichedOrders,
+      stats,
+    });
+  } catch (error) {
+    console.error("Get my orders error:", error);
+    return res.status(500).json({ success: false, message: "Failed to fetch customer orders" });
+  }
+};
+
