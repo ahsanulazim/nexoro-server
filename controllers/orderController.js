@@ -4,6 +4,7 @@ import client from "../config/db.js";
 import { createAndSendNotification } from "../utils/notificationHelper.js";
 import { broadcastDashboardStats } from "../utils/dashboardHelper.js";
 import { convertToBDT } from "../utils/currencyHelper.js";
+import { syncOrderCompletionPoints } from "./pointsController.js";
 
 const orderCollection = client.db("nexoro").collection("Orders");
 const orderCounterCollection = client.db("nexoro").collection("Counters");
@@ -126,6 +127,10 @@ export const createOrder = async (req, res) => {
     }
 
     const initialStatus = initialAssignedTo ? "Processing" : "Pending";
+    const parsedRewardPoints =
+      req.body.rewardPoints !== undefined && req.body.rewardPoints !== null
+        ? Math.max(0, Number(req.body.rewardPoints))
+        : 5;
 
     const order = await orderCollection.insertOne({
       clientId,
@@ -141,6 +146,7 @@ export const createOrder = async (req, res) => {
       createdByRole,
       createdById,
       assignedTo: initialAssignedTo,
+      rewardPoints: parsedRewardPoints,
       tasks: [],
       amount: amountNum,
       payment,
@@ -424,6 +430,7 @@ export const getAllOrders = async (req, res) => {
           dueAmount: dueAmount > 0 ? dueAmount : 0,
           assignedTo: order.assignedTo,
           assignedMember: member?.memberName || null,
+          rewardPoints: order.rewardPoints ?? 5,
           tasks: order.tasks || [],
           costs: order.costs || [],
           totalCost:
@@ -550,6 +557,7 @@ export const getOrder = async (req, res) => {
       success: true,
       order: {
         ...order,
+        rewardPoints: order.rewardPoints ?? 5,
         costs: order.costs || [],
         totalCost:
           order.totalCost ??
@@ -737,6 +745,13 @@ export const updateOrderStatus = async (req, res) => {
       { $set: { status: "Cancelled" } },
     );
 
+    // If order was Completed before cancellation, revert its completion points
+    await syncOrderCompletionPoints({
+      order,
+      newStatus: "Cancelled",
+      previousStatus: order.status,
+    });
+
     const cancellerName =
       caller?.name ||
       caller?.displayName ||
@@ -778,8 +793,8 @@ export const updateOrderStatus = async (req, res) => {
 //assign order to a member
 export const assignOrderToMember = async (req, res) => {
   const id = req.query.id || req.body.id || req.body.orderId;
-  const { assignedTo, tasks } = req.body;
-  console.log(id, assignedTo, tasks);
+  const { assignedTo, tasks, rewardPoints } = req.body;
+  console.log(id, assignedTo, tasks, rewardPoints);
 
   try {
     if (!id) {
@@ -875,6 +890,11 @@ export const assignOrderToMember = async (req, res) => {
     if (tasks !== undefined) {
       updateDoc.tasks = formattedTasks;
     }
+    if (rewardPoints !== undefined && rewardPoints !== null) {
+      updateDoc.rewardPoints = Math.max(0, Number(rewardPoints));
+    } else if (order.rewardPoints === undefined) {
+      updateDoc.rewardPoints = 5;
+    }
 
     const currentTasks =
       tasks !== undefined
@@ -933,6 +953,11 @@ export const assignOrderToMember = async (req, res) => {
           recipientRole: "admin",
         });
       }
+      await syncOrderCompletionPoints({
+        order: { ...order, ...updateDoc },
+        newStatus: dynamicStatus,
+        previousStatus: order.status,
+      });
     }
 
     // Real-time broadcast for dashboard stats (assigned vs pending projects updated)
@@ -954,7 +979,7 @@ export const assignOrderToMember = async (req, res) => {
 // Update tasks for an order (add, edit, toggle complete, delete tasks)
 export const updateOrderTasks = async (req, res) => {
   const id = req.query.id || req.body.orderId || req.params.orderId;
-  const { tasks, assignedTo } = req.body;
+  const { tasks, assignedTo, rewardPoints } = req.body;
 
   if (!id) {
     return res.status(400).json({
@@ -1105,6 +1130,12 @@ export const updateOrderTasks = async (req, res) => {
               recipientRole: "admin",
             });
           }
+
+          await syncOrderCompletionPoints({
+            order,
+            newStatus,
+            previousStatus: order.status,
+          });
         }
 
         broadcastDashboardStats().catch((err) =>
@@ -1137,6 +1168,10 @@ export const updateOrderTasks = async (req, res) => {
 
     if (assignedTo !== undefined) {
       updateDoc.assignedTo = assignedTo;
+    }
+
+    if (isAdmin && rewardPoints !== undefined && rewardPoints !== null) {
+      updateDoc.rewardPoints = Math.max(0, Number(rewardPoints));
     }
 
     const currentTasks =
@@ -1174,7 +1209,7 @@ export const updateOrderTasks = async (req, res) => {
       });
     }
 
-    // Trigger notification if status changed to Completed
+    // Trigger notification if status changed to Completed or Reopened
     if (dynamicStatus !== order.status) {
       if (dynamicStatus === "Completed") {
         await createAndSendNotification({
@@ -1195,6 +1230,11 @@ export const updateOrderTasks = async (req, res) => {
           });
         }
       }
+      await syncOrderCompletionPoints({
+        order: { ...order, ...updateDoc },
+        newStatus: dynamicStatus,
+        previousStatus: order.status,
+      });
     }
 
     // Notify assigned member if newly assigned or tasks were updated

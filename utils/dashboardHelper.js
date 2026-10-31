@@ -1,3 +1,4 @@
+import { ObjectId } from "mongodb";
 import { io } from "../socket/socket.js";
 import client from "../config/db.js";
 
@@ -9,7 +10,7 @@ const expenseCollection = client.db("nexoro").collection("expenses");
 const ADMIN_ROOM = "admin_global_room";
 
 /**
- * Helper to calculate percentage increase or decrease compared to previous month.
+ * Helper to calculate percentage increase or decrease compared to previous period.
  * - Returns percentage capped at 100%
  * - Positive or zero indicates increase, negative indicates decrease.
  * - Formatted with sign, numeric percentage, and direction flags.
@@ -44,34 +45,65 @@ const calculateMetricStats = (currentVal, prevVal) => {
  * Aggregate standalone expenses from expenses collection.
  */
 const getStandaloneExpenses = async (startDate, endDate) => {
-  const match = {};
-  if (startDate && endDate) {
-    match.createdAt = { $gte: startDate, $lt: endDate };
-  } else if (endDate) {
-    match.createdAt = { $lt: endDate };
-  }
-
-  const result = await expenseCollection
-    .aggregate([
-      { $match: match },
-      {
-        $group: {
-          _id: null,
-          total: {
-            $sum: {
-              $convert: {
-                input: "$amount",
-                to: "double",
-                onError: 0,
-                onNull: 0,
-              },
+  const pipeline = [
+    {
+      $project: {
+        amount: 1,
+        effectiveDate: {
+          $convert: {
+            input: {
+              $cond: [
+                {
+                  $and: [
+                    { $ne: ["$invoiceDate", null] },
+                    { $ne: ["$invoiceDate", ""] },
+                  ],
+                },
+                "$invoiceDate",
+                "$createdAt",
+              ],
             },
+            to: "date",
+            onError: "$createdAt",
+            onNull: "$createdAt",
           },
-          count: { $sum: 1 },
         },
       },
-    ])
-    .toArray();
+    },
+  ];
+
+  if (startDate && endDate) {
+    pipeline.push({
+      $match: {
+        effectiveDate: { $gte: startDate, $lte: endDate },
+      },
+    });
+  } else if (endDate) {
+    pipeline.push({
+      $match: {
+        effectiveDate: { $lt: endDate },
+      },
+    });
+  }
+
+  pipeline.push({
+    $group: {
+      _id: null,
+      total: {
+        $sum: {
+          $convert: {
+            input: "$amount",
+            to: "double",
+            onError: 0,
+            onNull: 0,
+          },
+        },
+      },
+      count: { $sum: 1 },
+    },
+  });
+
+  const result = await expenseCollection.aggregate(pipeline).toArray();
 
   return {
     total: result[0]?.total || 0,
@@ -131,7 +163,7 @@ const getOrderCosts = async (startDate, endDate) => {
             },
           },
           ...(startDate && endDate
-            ? [{ $match: { date: { $gte: startDate, $lt: endDate } } }]
+            ? [{ $match: { date: { $gte: startDate, $lte: endDate } } }]
             : endDate
             ? [{ $match: { date: { $lt: endDate } } }]
             : []),
@@ -159,7 +191,7 @@ const getOrderCosts = async (startDate, endDate) => {
             },
           },
           ...(startDate && endDate
-            ? [{ $match: { createdAt: { $gte: startDate, $lt: endDate } } }]
+            ? [{ $match: { createdAt: { $gte: startDate, $lte: endDate } } }]
             : endDate
             ? [{ $match: { createdAt: { $lt: endDate } } }]
             : []),
@@ -199,7 +231,7 @@ const getIncome = async (startDate, endDate) => {
   };
 
   if (startDate && endDate) {
-    match.createdAt = { $gte: startDate, $lt: endDate };
+    match.createdAt = { $gte: startDate, $lte: endDate };
   } else if (endDate) {
     match.createdAt = { $lt: endDate };
   }
@@ -259,20 +291,603 @@ const getIncome = async (startDate, endDate) => {
 };
 
 /**
- * Fetch counts and financial metrics in parallel across collections with previous month comparison.
+ * Fetch detailed itemized breakdown of orders and expenses in the specified date range.
  */
-export const getLatestDashboardStats = async () => {
+const getPeriodBreakdown = async (startDate, endDate) => {
+  if (!startDate || !endDate) return { orders: [], expenses: [], orderCosts: [] };
+
+  const [orders, expenses, ordersWithCosts] = await Promise.all([
+    // 1. Non-cancelled orders placed in this period
+    orderCollection
+      .find({
+        createdAt: { $gte: startDate, $lte: endDate },
+        status: { $ne: "Cancelled" },
+      })
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .toArray(),
+
+    // 2. Standalone expenses in this period
+    expenseCollection
+      .aggregate([
+        {
+          $project: {
+            title: 1,
+            invoice: 1,
+            invoiceDate: 1,
+            amount: {
+              $convert: {
+                input: "$amount",
+                to: "double",
+                onError: 0,
+                onNull: 0,
+              },
+            },
+            paymentStatus: 1,
+            paymentMethod: 1,
+            paidTo: 1,
+            frequency: 1,
+            createdAt: 1,
+            effectiveDate: {
+              $convert: {
+                input: {
+                  $cond: [
+                    {
+                      $and: [
+                        { $ne: ["$invoiceDate", null] },
+                        { $ne: ["$invoiceDate", ""] },
+                      ],
+                    },
+                    "$invoiceDate",
+                    "$createdAt",
+                  ],
+                },
+                to: "date",
+                onError: "$createdAt",
+                onNull: "$createdAt",
+              },
+            },
+          },
+        },
+        {
+          $match: {
+            effectiveDate: { $gte: startDate, $lte: endDate },
+          },
+        },
+        { $sort: { effectiveDate: -1 } },
+        { $limit: 100 },
+      ])
+      .toArray(),
+
+    // 3. Orders with project costs in this period
+    orderCollection
+      .find({
+        status: { $ne: "Cancelled" },
+        $or: [
+          { "costs.0": { $exists: true } },
+          { totalCost: { $gt: 0 } },
+        ],
+      })
+      .limit(100)
+      .toArray(),
+  ]);
+
+  // Enrich orders with client name/email
+  const enrichedOrders = await Promise.all(
+    orders.map(async (order) => {
+      let clientName = order.createdBy || "Customer";
+      let clientEmail = order.createdById || "";
+      if (order.clientId) {
+        try {
+          const clientDoc = await clientCollection.findOne({
+            _id: new ObjectId(order.clientId),
+          });
+          if (clientDoc) {
+            clientName = clientDoc.name || clientName;
+            clientEmail = clientDoc.email || clientEmail;
+          }
+        } catch {}
+      }
+      return {
+        _id: order._id,
+        orderId: order.orderId,
+        service: order.service,
+        serviceName: order.serviceName || order.service,
+        price: Number(order.price) || 0,
+        amount: Number(order.amount) || 0,
+        discount: Number(order.discount) || 0,
+        payment: order.payment || "Pending",
+        status: order.status || "Pending",
+        clientName,
+        clientEmail,
+        createdAt: order.createdAt,
+      };
+    })
+  );
+
+  // Extract order project costs that fall in the date range
+  const matchedOrderCosts = [];
+  ordersWithCosts.forEach((order) => {
+    if (Array.isArray(order.costs) && order.costs.length > 0) {
+      order.costs.forEach((cost) => {
+        const costDate = cost.date ? new Date(cost.date) : order.createdAt;
+        if (costDate >= startDate && costDate <= endDate) {
+          matchedOrderCosts.push({
+            orderId: order.orderId,
+            serviceName: order.serviceName || order.service,
+            title: cost.name || cost.title || "Project Cost",
+            amount: Number(cost.amount) || 0,
+            date: costDate,
+          });
+        }
+      });
+    } else if (order.totalCost > 0 && order.createdAt >= startDate && order.createdAt <= endDate) {
+      matchedOrderCosts.push({
+        orderId: order.orderId,
+        serviceName: order.serviceName || order.service,
+        title: "Order Cost",
+        amount: Number(order.totalCost) || 0,
+        date: order.createdAt,
+      });
+    }
+  });
+
+  return {
+    orders: enrichedOrders,
+    expenses: expenses.map((e) => ({
+      _id: e._id,
+      title: e.title,
+      invoice: e.invoice || "",
+      invoiceDate: e.invoiceDate || "",
+      amount: e.amount || 0,
+      paymentStatus: e.paymentStatus || "paid",
+      paymentMethod: e.paymentMethod || "cash",
+      paidTo: e.paidTo || "",
+      frequency: e.frequency || "single",
+      date: e.effectiveDate || e.createdAt,
+    })),
+    orderCosts: matchedOrderCosts,
+  };
+};
+
+/**
+ * Fetch counts and financial metrics in parallel across collections with previous period comparison.
+ * Supports optional custom startDate and endDate strings (e.g. "2026-10-02" or ISO format).
+ */
+/**
+ * Helper to compute period date boundaries and labels consistently
+ */
+export const parsePeriodDates = (customStart, customEnd) => {
   const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth(); // 0-indexed
+  let currentStart, currentEnd;
+  let prevStart, prevEnd;
+  let isCustom = false;
+  let periodLabel = "Current Month";
 
-  // Current month date boundaries
-  const currentStart = new Date(year, month, 1);
-  const currentEnd = new Date(year, month + 1, 1);
+  if (customStart) {
+    isCustom = true;
+    const startStr = String(customStart).includes("T")
+      ? customStart
+      : `${customStart}T00:00:00.000+06:00`;
+    const endTarget = customEnd || customStart;
+    const endStr = String(endTarget).includes("T")
+      ? endTarget
+      : `${endTarget}T23:59:59.999+06:00`;
 
-  // Previous month date boundaries
-  const prevStart = new Date(year, month - 1, 1);
-  const prevEnd = new Date(year, month, 1);
+    currentStart = new Date(startStr);
+    currentEnd = new Date(endStr);
+
+    if (isNaN(currentStart.getTime())) currentStart = new Date(customStart);
+    if (isNaN(currentEnd.getTime())) currentEnd = new Date(endTarget);
+
+    const durationMs = Math.max(1000, currentEnd.getTime() - currentStart.getTime());
+    prevEnd = new Date(currentStart.getTime() - 1);
+    prevStart = new Date(currentStart.getTime() - durationMs);
+
+    const isSingleDay =
+      currentStart.getFullYear() === currentEnd.getFullYear() &&
+      currentStart.getMonth() === currentEnd.getMonth() &&
+      currentStart.getDate() === currentEnd.getDate();
+
+    if (isSingleDay) {
+      periodLabel = currentStart.toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        timeZone: "Asia/Dhaka",
+      });
+    } else {
+      periodLabel = `${currentStart.toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        timeZone: "Asia/Dhaka",
+      })} - ${currentEnd.toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        timeZone: "Asia/Dhaka",
+      })}`;
+    }
+  } else {
+    const year = now.getFullYear();
+    const month = now.getMonth(); // 0-indexed
+
+    // Current month date boundaries
+    currentStart = new Date(year, month, 1, 0, 0, 0, 0);
+    currentEnd = new Date(year, month + 1, 0, 23, 59, 59, 999);
+
+    // Previous month date boundaries
+    prevStart = new Date(year, month - 1, 1, 0, 0, 0, 0);
+    prevEnd = new Date(year, month, 0, 23, 59, 59, 999);
+    periodLabel = "Current Month";
+  }
+
+  return { currentStart, currentEnd, prevStart, prevEnd, periodLabel, isCustom };
+};
+
+/**
+ * Fetch backend-paginated itemized breakdown (Orders or Expenses) for the period.
+ */
+export const getPaginatedPeriodBreakdown = async ({
+  startDate,
+  endDate,
+  tab = "orders",
+  page = 1,
+  limit = 10,
+  search = "",
+}) => {
+  const { currentStart, currentEnd, periodLabel } = parsePeriodDates(startDate, endDate);
+  const parsedPage = Math.max(1, parseInt(page) || 1);
+  const parsedLimit = Math.max(1, parseInt(limit) || 10);
+  const skip = (parsedPage - 1) * parsedLimit;
+
+  // Compute period totals & KPI summary in parallel
+  const [totalOrdersInPeriod, standaloneExpensesResult, orderCostsResult, incomeTotal] =
+    await Promise.all([
+      orderCollection.countDocuments({
+        createdAt: { $gte: currentStart, $lte: currentEnd },
+        status: { $ne: "Cancelled" },
+      }),
+      getStandaloneExpenses(currentStart, currentEnd),
+      getOrderCosts(currentStart, currentEnd),
+      getIncome(currentStart, currentEnd),
+    ]);
+
+  const totalPeriodExpenses = standaloneExpensesResult.count + orderCostsResult.count;
+  const totalPeriodExpenseAmount = standaloneExpensesResult.total + orderCostsResult.total;
+  const netDifference = incomeTotal - totalPeriodExpenseAmount;
+
+  const summary = {
+    totalOrders: totalOrdersInPeriod,
+    totalExpenses: totalPeriodExpenses,
+    totalIncome: Math.round(incomeTotal),
+    totalExpenseAmount: Math.round(totalPeriodExpenseAmount),
+    netDifference: Math.round(netDifference),
+    periodLabel,
+  };
+
+  // 1. Tab: EXPENSES & COSTS
+  if (tab === "expenses") {
+    const pipeline = [
+      {
+        $project: {
+          _id: { $toString: "$_id" },
+          title: "$title",
+          ref: { $ifNull: ["$invoice", "-"] },
+          paidTo: { $ifNull: ["$paidTo", "-"] },
+          amount: {
+            $convert: {
+              input: "$amount",
+              to: "double",
+              onError: 0,
+              onNull: 0,
+            },
+          },
+          paymentStatus: { $ifNull: ["$paymentStatus", "paid"] },
+          paymentMethod: { $ifNull: ["$paymentMethod", "N/A"] },
+          date: {
+            $convert: {
+              input: {
+                $cond: [
+                  {
+                    $and: [
+                      { $ne: ["$invoiceDate", null] },
+                      { $ne: ["$invoiceDate", ""] },
+                    ],
+                  },
+                  "$invoiceDate",
+                  "$createdAt",
+                ],
+              },
+              to: "date",
+              onError: "$createdAt",
+              onNull: "$createdAt",
+            },
+          },
+          type: { $literal: "General Expense" },
+        },
+      },
+      {
+        $match: {
+          date: { $gte: currentStart, $lte: currentEnd },
+        },
+      },
+      {
+        $unionWith: {
+          coll: "Orders",
+          pipeline: [
+            {
+              $match: {
+                status: { $ne: "Cancelled" },
+                $or: [
+                  { "costs.0": { $exists: true } },
+                  { totalCost: { $gt: 0 } },
+                ],
+              },
+            },
+            {
+              $project: {
+                orderId: 1,
+                serviceName: { $ifNull: ["$serviceName", "$service"] },
+                createdAt: 1,
+                costs: { $ifNull: ["$costs", []] },
+                totalCost: {
+                  $convert: {
+                    input: "$totalCost",
+                    to: "double",
+                    onError: 0,
+                    onNull: 0,
+                  },
+                },
+              },
+            },
+            {
+              $facet: {
+                fromCosts: [
+                  { $unwind: "$costs" },
+                  {
+                    $project: {
+                      _id: {
+                        $concat: [
+                          { $ifNull: ["$orderId", ""] },
+                          "-",
+                          { $ifNull: ["$costs.name", { $ifNull: ["$costs.title", "cost"] }] },
+                          "-",
+                          {
+                            $dateToString: {
+                              date: {
+                                $convert: {
+                                  input: { $ifNull: ["$costs.date", "$createdAt"] },
+                                  to: "date",
+                                  onError: "$createdAt",
+                                  onNull: "$createdAt",
+                                },
+                              },
+                            },
+                          },
+                        ],
+                      },
+                      title: {
+                        $concat: [
+                          { $ifNull: ["$serviceName", "Service"] },
+                          " - ",
+                          { $ifNull: ["$costs.name", { $ifNull: ["$costs.title", "Project Cost"] }] },
+                        ],
+                      },
+                      ref: { $ifNull: ["$orderId", "-"] },
+                      paidTo: { $literal: "Project Expense" },
+                      amount: {
+                        $convert: {
+                          input: "$costs.amount",
+                          to: "double",
+                          onError: 0,
+                          onNull: 0,
+                        },
+                      },
+                      paymentStatus: { $literal: "Paid" },
+                      paymentMethod: { $literal: "Internal" },
+                      date: {
+                        $convert: {
+                          input: { $ifNull: ["$costs.date", "$createdAt"] },
+                          to: "date",
+                          onError: "$createdAt",
+                          onNull: "$createdAt",
+                        },
+                      },
+                      type: { $literal: "Order Cost" },
+                    },
+                  },
+                  {
+                    $match: {
+                      date: { $gte: currentStart, $lte: currentEnd },
+                    },
+                  },
+                ],
+                fromTotalCostOnly: [
+                  {
+                    $match: {
+                      totalCost: { $gt: 0 },
+                      costs: { $size: 0 },
+                      createdAt: { $gte: currentStart, $lte: currentEnd },
+                    },
+                  },
+                  {
+                    $project: {
+                      _id: { $concat: [{ $ifNull: ["$orderId", ""] }, "-Order Cost"] },
+                      title: {
+                        $concat: [
+                          { $ifNull: ["$serviceName", "Service"] },
+                          " - Order Cost",
+                        ],
+                      },
+                      ref: { $ifNull: ["$orderId", "-"] },
+                      paidTo: { $literal: "Project Expense" },
+                      amount: "$totalCost",
+                      paymentStatus: { $literal: "Paid" },
+                      paymentMethod: { $literal: "Internal" },
+                      date: "$createdAt",
+                      type: { $literal: "Order Cost" },
+                    },
+                  },
+                ],
+              },
+            },
+            {
+              $project: {
+                allCosts: { $concatArrays: ["$fromCosts", "$fromTotalCostOnly"] },
+              },
+            },
+            { $unwind: "$allCosts" },
+            { $replaceRoot: { newRoot: "$allCosts" } },
+          ],
+        },
+      },
+    ];
+
+    if (search && search.trim()) {
+      const searchRegex = new RegExp(search.trim(), "i");
+      pipeline.push({
+        $match: {
+          $or: [
+            { title: { $regex: searchRegex } },
+            { paidTo: { $regex: searchRegex } },
+            { ref: { $regex: searchRegex } },
+            { paymentMethod: { $regex: searchRegex } },
+          ],
+        },
+      });
+    }
+
+    pipeline.push({ $sort: { date: -1 } });
+    pipeline.push({
+      $facet: {
+        metadata: [{ $count: "total" }],
+        data: [{ $skip: skip }, { $limit: parsedLimit }],
+      },
+    });
+
+    const facetRes = await expenseCollection.aggregate(pipeline).toArray();
+    const facetData = facetRes[0] || {};
+    const totalFiltered = facetData.metadata?.[0]?.total || 0;
+    const items = facetData.data || [];
+
+    return {
+      tab: "expenses",
+      items,
+      pagination: {
+        currentPage: parsedPage,
+        totalPages: Math.ceil(totalFiltered / parsedLimit) || 1,
+        totalItems: totalFiltered,
+        limit: parsedLimit,
+        hasNext: parsedPage * parsedLimit < totalFiltered,
+        hasPrev: parsedPage > 1,
+        start: totalFiltered === 0 ? 0 : skip + 1,
+        end: Math.min(skip + parsedLimit, totalFiltered),
+      },
+      summary,
+    };
+  }
+
+  // 2. Tab: ORDERS & REVENUE
+  const orderQuery = {
+    createdAt: { $gte: currentStart, $lte: currentEnd },
+    status: { $ne: "Cancelled" },
+  };
+
+  if (search && search.trim()) {
+    const searchRegex = new RegExp(search.trim(), "i");
+    const matchingClients = await clientCollection
+      .find({
+        $or: [
+          { name: { $regex: searchRegex } },
+          { email: { $regex: searchRegex } },
+        ],
+      })
+      .project({ _id: 1 })
+      .toArray();
+    const matchingClientIds = matchingClients.map((c) => c._id.toString());
+
+    orderQuery.$or = [
+      { orderId: { $regex: searchRegex } },
+      { service: { $regex: searchRegex } },
+      { serviceName: { $regex: searchRegex } },
+      { clientName: { $regex: searchRegex } },
+      { clientEmail: { $regex: searchRegex } },
+      { createdBy: { $regex: searchRegex } },
+      { "epsData.CustomerName": { $regex: searchRegex } },
+      { "epsData.CustomerEmail": { $regex: searchRegex } },
+      ...(matchingClientIds.length > 0
+        ? [{ clientId: { $in: matchingClientIds } }]
+        : []),
+    ];
+  }
+
+  const [totalFilteredOrders, orders] = await Promise.all([
+    orderCollection.countDocuments(orderQuery),
+    orderCollection
+      .find(orderQuery)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parsedLimit)
+      .toArray(),
+  ]);
+
+  const enrichedOrders = await Promise.all(
+    orders.map(async (order) => {
+      let clientName = order.createdBy || order.epsData?.CustomerName || "Customer";
+      let clientEmail = order.createdById || order.epsData?.CustomerEmail || "";
+      if (order.clientId) {
+        try {
+          const clientDoc = await clientCollection.findOne({
+            _id: new ObjectId(order.clientId),
+          });
+          if (clientDoc) {
+            clientName = clientDoc.name || clientName;
+            clientEmail = clientDoc.email || clientEmail;
+          }
+        } catch {}
+      }
+      return {
+        _id: order._id.toString(),
+        orderId: order.orderId,
+        service: order.service,
+        serviceName: order.serviceName || order.service,
+        price: Number(order.price) || 0,
+        amount: Number(order.amount) || 0,
+        discount: Number(order.discount) || 0,
+        payment: order.payment || "Pending",
+        status: order.status || "Pending",
+        clientName,
+        clientEmail,
+        createdAt: order.createdAt,
+      };
+    })
+  );
+
+  return {
+    tab: "orders",
+    items: enrichedOrders,
+    pagination: {
+      currentPage: parsedPage,
+      totalPages: Math.ceil(totalFilteredOrders / parsedLimit) || 1,
+      totalItems: totalFilteredOrders,
+      limit: parsedLimit,
+      hasNext: parsedPage * parsedLimit < totalFilteredOrders,
+      hasPrev: parsedPage > 1,
+      start: totalFilteredOrders === 0 ? 0 : skip + 1,
+      end: Math.min(skip + parsedLimit, totalFilteredOrders),
+    },
+    summary,
+  };
+};
+
+/**
+ * Fetch counts and financial metrics in parallel across collections with previous period comparison.
+ * Supports optional custom startDate and endDate strings (e.g. "2026-10-02" or ISO format).
+ */
+export const getLatestDashboardStats = async (customStart, customEnd) => {
+  const { currentStart, currentEnd, prevStart, prevEnd, periodLabel, isCustom } =
+    parsePeriodDates(customStart, customEnd);
 
   const [
     // Registered users
@@ -308,7 +923,7 @@ export const getLatestDashboardStats = async () => {
   ] = await Promise.all([
     // Total registered users across all time
     userCollection.countDocuments(),
-    // Registered users created before current month
+    // Registered users created before current period
     userCollection.countDocuments({
       $or: [
         { createdAt: { $lt: currentStart } },
@@ -316,13 +931,13 @@ export const getLatestDashboardStats = async () => {
       ],
     }),
 
-    // Current month orders
+    // Current period orders
     orderCollection.countDocuments({
-      createdAt: { $gte: currentStart, $lt: currentEnd },
+      createdAt: { $gte: currentStart, $lte: currentEnd },
     }),
-    // Previous month orders
+    // Previous period orders
     orderCollection.countDocuments({
-      createdAt: { $gte: prevStart, $lt: prevEnd },
+      createdAt: { $gte: prevStart, $lte: prevEnd },
     }),
 
     // Overall total assigned projects (all time)
@@ -437,6 +1052,13 @@ export const getLatestDashboardStats = async () => {
       currentPendingProjects,
       prevPendingProjects,
     ),
+    dateRange: {
+      startDate: currentStart.toISOString(),
+      endDate: currentEnd.toISOString(),
+      label: periodLabel,
+      isCustom,
+    },
+    breakdown: { orders: [], expenses: [], orderCosts: [] },
     updatedAt: new Date().toISOString(),
   };
 };

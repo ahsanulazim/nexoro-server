@@ -13,6 +13,26 @@ const client = new MongoClient(uri, {
   },
 });
 
+async function ensureInboxIndexes(db) {
+  try {
+    const msgCollection = db.collection("Messages");
+    const convCollection = db.collection("Conversations");
+
+    await Promise.all([
+      msgCollection.createIndex({ roomId: 1, createdAt: -1 }),
+      msgCollection.createIndex({ roomId: 1, isRead: 1, senderRole: 1 }),
+      msgCollection.createIndex({ metaMessageId: 1 }, { sparse: true }),
+      msgCollection.createIndex({ externalMetaId: 1 }, { sparse: true }),
+      convCollection.createIndex({ roomId: 1 }, { unique: true }),
+      convCollection.createIndex({ platform: 1, updatedAt: -1 }),
+      convCollection.createIndex({ updatedAt: -1 }),
+      convCollection.createIndex({ customerId: 1 }, { sparse: true }),
+    ]);
+  } catch (idxErr) {
+    console.warn("Index initialization warning:", idxErr.message);
+  }
+}
+
 async function run() {
   try {
     await client.connect();
@@ -21,6 +41,7 @@ async function run() {
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
     );
+    await ensureInboxIndexes(client.db("nexoro"));
   } finally {
     // Ensures that the client will close when you finish/error
   }

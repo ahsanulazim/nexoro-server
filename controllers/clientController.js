@@ -220,11 +220,19 @@ export const updateClient = async (req, res) => {
     if (!existingClient) {
       return res.status(404).json({ message: "Client not found" });
     }
+
+    const cleanEmail = (email || "").trim();
+    const finalEmail = cleanEmail || existingClient.email;
+    const isPlaceholderEmail = Boolean(
+      !finalEmail || finalEmail.toLowerCase().endsWith("@client.nexoro.local")
+    );
+
     const updatedClient = {
       name,
       company,
       role,
-      email,
+      email: finalEmail,
+      isPlaceholderEmail,
       phone,
       country,
       slider,

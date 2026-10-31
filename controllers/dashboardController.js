@@ -1,7 +1,10 @@
 import { ObjectId } from "mongodb";
 import client from "../config/db.js";
 import admin from "../admin/firebase.config.js";
-import { getLatestDashboardStats } from "../utils/dashboardHelper.js";
+import {
+  getLatestDashboardStats,
+  getPaginatedPeriodBreakdown,
+} from "../utils/dashboardHelper.js";
 
 const orderCollection = client.db("nexoro").collection("Orders");
 const userCollection = client.db("nexoro").collection("Users");
@@ -103,7 +106,8 @@ export const analytics = async (req, res) => {
  */
 export const getDashboardStats = async (req, res) => {
   try {
-    const stats = await getLatestDashboardStats();
+    const { startDate, endDate } = req.query;
+    const stats = await getLatestDashboardStats(startDate, endDate);
 
     return res.status(200).json({
       success: true,
@@ -115,6 +119,44 @@ export const getDashboardStats = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to fetch dashboard statistics",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * Controller: Get paginated period breakdown (Orders or Expenses)
+ * GET /dashboard/period-breakdown
+ * Query:
+ *  - tab: "orders" | "expenses" (default: "orders")
+ *  - page: number (default: 1)
+ *  - limit: number (default: 10)
+ *  - startDate: string (ISO or date string)
+ *  - endDate: string (ISO or date string)
+ *  - search: string
+ */
+export const getPeriodBreakdown = async (req, res) => {
+  try {
+    const { startDate, endDate, tab, page, limit, search } = req.query;
+    const result = await getPaginatedPeriodBreakdown({
+      startDate,
+      endDate,
+      tab: tab || "orders",
+      page: parseInt(page) || 1,
+      limit: parseInt(limit) || 10,
+      search: search || "",
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Period breakdown fetched successfully",
+      ...result,
+    });
+  } catch (error) {
+    console.error("Get Period Breakdown Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch period breakdown",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }

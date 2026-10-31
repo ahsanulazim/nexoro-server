@@ -343,6 +343,7 @@ export const getAllProjects = async (req, res) => {
           },
           payment: 1,
           paymentMethod: 1,
+          rewardPoints: { $ifNull: ["$rewardPoints", 5] },
           tasks: 1,
           costs: { $ifNull: ["$costs", []] },
           totalCost: { $ifNull: ["$totalCost", 0] },
