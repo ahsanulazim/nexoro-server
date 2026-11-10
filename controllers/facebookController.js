@@ -157,6 +157,14 @@ export const handleFBWebhook = async (req, res) => {
 
           // Check if conversation already has customer profile cached
           let conversation = await conversationCollection.findOne({ roomId });
+
+          // Drop incoming messages if contact is blocked
+          if (conversation?.isBlocked) {
+            console.log(
+              `[Meta Webhook - ${platform}] Blocked contact ${senderId} (${roomId}) sent a message. Dropping to prevent spam.`
+            );
+            continue;
+          }
           let customerName = conversation?.customer?.name;
           let customerAvatar = conversation?.customer?.avatar;
 

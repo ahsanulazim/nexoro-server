@@ -5,10 +5,12 @@ import {
   sendMessage,
   uploadAttachments,
   deleteConversation,
+  toggleBlockConversation,
   getCustomerCRMDetails,
   confirmOrderFromChat,
   addInternalNote,
   deleteInternalNote,
+  updateCRMProfile,
   getCannedResponses,
   createCannedResponse,
 } from "../controllers/messageController.js";
@@ -39,6 +41,12 @@ messageRouter.get(
   getSidebarConversations,
 );
 messageRouter.delete("/deleteConversation", verifyAdmin, deleteConversation);
+messageRouter.post(
+  "/toggleBlock",
+  verifyId,
+  verifyAdminOrMember,
+  toggleBlockConversation
+);
 
 // CRM & Notes Routes
 messageRouter.get("/crmDetails", verifyId, getCustomerCRMDetails);
@@ -50,6 +58,18 @@ messageRouter.post(
 );
 messageRouter.post("/addNote", verifyId, addInternalNote);
 messageRouter.delete("/deleteNote", verifyId, deleteInternalNote);
+messageRouter.put(
+  "/updateCRMProfile",
+  verifyId,
+  verifyAdminOrMember,
+  updateCRMProfile
+);
+messageRouter.post(
+  "/updateCRMProfile",
+  verifyId,
+  verifyAdminOrMember,
+  updateCRMProfile
+);
 
 // Canned Responses Routes
 messageRouter.get("/cannedResponses", verifyId, getCannedResponses);

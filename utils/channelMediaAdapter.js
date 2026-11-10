@@ -215,19 +215,27 @@ export const sendMetaMessage = async (recipientId, messageContent) => {
 /**
  * Formats an outgoing WhatsApp Cloud API media payload.
  */
-export const formatWhatsAppMediaPayload = (recipientPhone, attachment, caption = "") => {
+export const formatWhatsAppMediaPayload = (recipientId, attachment, caption = "") => {
   const category = attachment.category || categorizeMime(attachment.mimeType, attachment.originalName);
   let waType = "document";
   if (category === "image") waType = "image";
   else if (category === "video") waType = "video";
   else if (category === "audio") waType = "audio";
 
+  const target = String(recipientId || "").trim();
+  const isPhoneNumber = /^\+?[0-9]+$/.test(target);
+
   const payload = {
     messaging_product: "whatsapp",
     recipient_type: "individual",
-    to: recipientPhone.replace(/[^0-9]/g, ""),
     type: waType,
   };
+
+  if (isPhoneNumber) {
+    payload.to = target.replace(/[^0-9]/g, "");
+  } else {
+    payload.recipient = target;
+  }
 
   if (waType === "document") {
     payload.document = {

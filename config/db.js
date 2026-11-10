@@ -27,6 +27,8 @@ async function ensureInboxIndexes(db) {
       convCollection.createIndex({ platform: 1, updatedAt: -1 }),
       convCollection.createIndex({ updatedAt: -1 }),
       convCollection.createIndex({ customerId: 1 }, { sparse: true }),
+      convCollection.createIndex({ "customer.bsuid": 1 }, { sparse: true }),
+      convCollection.createIndex({ "customer.phone": 1 }, { sparse: true }),
     ]);
   } catch (idxErr) {
     console.warn("Index initialization warning:", idxErr.message);

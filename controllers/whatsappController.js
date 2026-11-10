@@ -1,5 +1,6 @@
 import axios from "axios";
 import { config } from "dotenv";
+import { ObjectId } from "mongodb";
 import client from "../config/db.js";
 import cloudinary from "../config/cloudinary.js";
 import { io } from "../socket/socket.js";
@@ -9,11 +10,12 @@ config();
 
 const msgCollection = client.db("nexoro").collection("Messages");
 const conversationCollection = client.db("nexoro").collection("Conversations");
+const clientCollection = client.db("nexoro").collection("Clients");
 
 /**
  * Helper to download media from WhatsApp Cloud API and upload to Cloudinary
  */
-const downloadAndUploadWhatsAppMedia = async (mediaId, defaultName = "whatsapp_file") => {
+export const downloadAndUploadWhatsAppMedia = async (mediaId, defaultName = "whatsapp_file") => {
   try {
     const accessToken = process.env.WHATSAPP_ACCESS_TOKEN || process.env.FB_ACCESS_TOKEN;
     if (!accessToken || !mediaId) return null;
@@ -60,6 +62,34 @@ const downloadAndUploadWhatsAppMedia = async (mediaId, defaultName = "whatsapp_f
 };
 
 /**
+ * Helper to mark an incoming WhatsApp message as read via WhatsApp Cloud API
+ */
+export const markWhatsAppMessageAsRead = async (metaMessageId) => {
+  try {
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+    const accessToken = process.env.WHATSAPP_ACCESS_TOKEN || process.env.FB_ACCESS_TOKEN;
+    if (!phoneNumberId || !accessToken || !metaMessageId) return;
+
+    await axios.post(
+      `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`,
+      {
+        messaging_product: "whatsapp",
+        status: "read",
+        message_id: metaMessageId,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+  } catch (err) {
+    console.error("Error marking WhatsApp message as read via Cloud API:", err.response?.data || err.message);
+  }
+};
+
+/**
  * 1. WhatsApp Webhook Verification (GET /whatsapp/webhook)
  */
 export const verifyWhatsAppWebhook = async (req, res) => {
@@ -101,10 +131,44 @@ export const handleWhatsAppWebhook = async (req, res) => {
           const contacts = value?.contacts || [];
 
           for (const msg of messages) {
-            const senderPhone = msg.from; // e.g. "8801700000000"
+            // 1. Identify sender details (handling phone number, username, and BSUID)
+            const rawPhone = msg.from ? String(msg.from).replace(/[^0-9]/g, "") : null;
+            const rawBsuid = msg.from_user_id || null;
+
+            // Match contact from contacts array
+            const contact =
+              contacts.find((c) => {
+                if (rawPhone && c.wa_id && String(c.wa_id).replace(/[^0-9]/g, "") === rawPhone) return true;
+                if (rawBsuid && c.user_id && c.user_id === rawBsuid) return true;
+                return false;
+              }) ||
+              contacts[0] ||
+              null;
+
+            const finalPhone = rawPhone || (contact?.wa_id ? String(contact.wa_id).replace(/[^0-9]/g, "") : null);
+            const finalBsuid = rawBsuid || contact?.user_id || null;
+            const rawUsername = contact?.profile?.username || null;
+            const finalUsername = rawUsername ? String(rawUsername).replace(/^@/, "").trim() : null;
+            const profileName = contact?.profile?.name?.trim() || null;
+
+            // Stable sender identifier: prefer phone number if available, otherwise BSUID, otherwise username
+            const senderIdentifier = finalPhone || finalBsuid || finalUsername;
+            if (!senderIdentifier) {
+              console.warn("Skipping WhatsApp message with unknown sender identity:", msg);
+              continue;
+            }
+
             const timestamp = parseInt(msg.timestamp) * 1000 || Date.now();
-            const contact = contacts.find((c) => c.wa_id === senderPhone);
-            const customerName = contact?.profile?.name || `WhatsApp (+${senderPhone})`;
+
+            // Determine user-friendly customer name
+            let customerName = "WhatsApp User";
+            if (profileName) {
+              customerName = profileName;
+            } else if (finalUsername) {
+              customerName = `@${finalUsername}`;
+            } else if (finalPhone) {
+              customerName = `WhatsApp (+${finalPhone})`;
+            }
 
             let text = "";
             let attachments = [];
@@ -152,16 +216,61 @@ export const handleWhatsAppWebhook = async (req, res) => {
               text = `Sent a ${msg.type} message`;
             }
 
-            const roomId = `wa_${senderPhone}`;
+            // 2. Query existing conversation by BSUID, Phone, or Username (ignoring corrupted wa_undefined)
+            let existingConv = null;
+            const lookupOr = [];
+
+            if (finalBsuid) {
+              lookupOr.push({ "customer.bsuid": finalBsuid });
+              lookupOr.push({ platformId: finalBsuid });
+              lookupOr.push({ roomId: `wa_${finalBsuid}` });
+            }
+            if (finalPhone) {
+              lookupOr.push({ "customer.phone": `+${finalPhone}` });
+              lookupOr.push({ platformId: finalPhone });
+              lookupOr.push({ roomId: `wa_${finalPhone}` });
+            }
+            if (finalUsername) {
+              lookupOr.push({ "customer.userName": finalUsername });
+              lookupOr.push({ "customer.userName": `@${finalUsername}` });
+            }
+
+            if (lookupOr.length > 0) {
+              existingConv = await conversationCollection.findOne({
+                platform: "whatsapp",
+                roomId: { $ne: "wa_undefined" },
+                $or: lookupOr,
+              });
+            }
+
+            // Stable roomId
+            const roomId =
+              existingConv?.roomId && existingConv.roomId !== "wa_undefined"
+                ? existingConv.roomId
+                : `wa_${senderIdentifier}`;
+
+            if (!existingConv) {
+              existingConv = await conversationCollection.findOne({ roomId });
+            }
+
+            // Drop incoming messages if contact is blocked
+            if (existingConv?.isBlocked) {
+              console.log(
+                `[WhatsApp Webhook] Blocked contact ${senderIdentifier} (${roomId}) sent a message. Dropping to prevent spam.`
+              );
+              continue;
+            }
+
             const messageData = {
               roomId,
               platform: "whatsapp",
-              senderId: senderPhone,
+              senderId: senderIdentifier,
               senderRole: "customer",
               receiverId: "admin",
               text,
               attachments,
               isRead: false,
+              metaMessageId: msg.id || null,
               createdAt: new Date(timestamp),
             };
 
@@ -169,11 +278,12 @@ export const handleWhatsAppWebhook = async (req, res) => {
             await msgCollection.insertOne(messageData);
 
             const customerObj = {
-              id: senderPhone,
-              _id: senderPhone,
+              id: senderIdentifier,
+              _id: senderIdentifier,
               name: customerName,
-              userName: customerName,
-              phone: `+${senderPhone}`,
+              userName: finalUsername ? `@${finalUsername}` : customerName,
+              phone: finalPhone ? `+${finalPhone}` : (existingConv?.customer?.phone || null),
+              bsuid: finalBsuid || existingConv?.customer?.bsuid || null,
               avatar: null,
             };
 
@@ -183,10 +293,14 @@ export const handleWhatsAppWebhook = async (req, res) => {
               {
                 $set: {
                   platform: "whatsapp",
-                  platformId: senderPhone,
+                  platformId: senderIdentifier,
                   lastMessage: text,
                   updatedAt: new Date(timestamp),
-                  customer: customerObj,
+                  lastCustomerMessageAt: new Date(timestamp),
+                  customer: {
+                    ...(existingConv?.customer || {}),
+                    ...customerObj,
+                  },
                 },
                 $setOnInsert: {
                   createdAt: new Date(timestamp),
@@ -197,6 +311,21 @@ export const handleWhatsAppWebhook = async (req, res) => {
             );
             const updatedConv = convRes?.value ?? convRes;
 
+            // 2b. Sync CRM Client profile if this conversation is linked to a Client
+            const targetClientId = existingConv?.clientId || existingConv?.customer?.clientId;
+            if (targetClientId && ObjectId.isValid(String(targetClientId))) {
+              const clientSync = { updatedAt: new Date() };
+              if (finalPhone) clientSync.phone = `+${finalPhone}`;
+              if (finalBsuid) clientSync.bsuid = finalBsuid;
+              if (finalUsername) clientSync.userName = `@${finalUsername}`;
+              if (profileName) clientSync.name = profileName;
+
+              await clientCollection.updateOne(
+                { _id: new ObjectId(String(targetClientId)) },
+                { $set: clientSync }
+              );
+            }
+
             // 3. Emit realtime socket events
             io.to(roomId).emit("receiveMessage", messageData);
             io.to("admin_global_room").emit("receiveMessage", messageData);
@@ -204,9 +333,11 @@ export const handleWhatsAppWebhook = async (req, res) => {
               roomId,
               lastMessage: text,
               updatedAt: new Date(timestamp),
-              customerId: senderPhone,
+              lastCustomerMessageAt: new Date(timestamp),
+              customerId: senderIdentifier,
               platform: "whatsapp",
               customer: customerObj,
+              unreadCount: typeof updatedConv?.unreadCount === "number" ? updatedConv.unreadCount : 1,
             });
 
             const unreadCount =
@@ -228,6 +359,79 @@ export const handleWhatsAppWebhook = async (req, res) => {
               recipientRole: "staff",
             });
           }
+
+          // 5. Process WhatsApp delivery, read, and failure status updates
+          const statuses = value?.statuses || [];
+          for (const statusItem of statuses) {
+            const metaMessageId = statusItem.id;
+            const deliveryStatus = statusItem.status; // "sent" | "delivered" | "read" | "failed"
+            const statusTimestamp = parseInt(statusItem.timestamp) * 1000 || Date.now();
+            const statusDate = new Date(statusTimestamp);
+
+            if (!metaMessageId) continue;
+
+            const updateData = {
+              deliveryStatus,
+              ...(deliveryStatus === "delivered" ? { deliveredAt: statusDate } : {}),
+              ...(deliveryStatus === "read" ? { isRead: true, readAt: statusDate } : {}),
+              ...(deliveryStatus === "sent" ? { sentAt: statusDate } : {}),
+              ...(deliveryStatus === "failed"
+                ? {
+                    failedAt: statusDate,
+                    failureReason:
+                      statusItem.errors?.[0]?.message ||
+                      statusItem.errors?.[0]?.title ||
+                      "Message failed to deliver to recipient",
+                  }
+                : {}),
+            };
+
+            const updatedMsgRes = await msgCollection.findOneAndUpdate(
+              {
+                $or: [
+                  { metaMessageId },
+                  { externalMetaId: metaMessageId },
+                ],
+              },
+              { $set: updateData },
+              { returnDocument: "after" }
+            );
+
+            const updatedMsg = updatedMsgRes?.value ?? updatedMsgRes;
+            const targetRoomId = updatedMsg?.roomId;
+
+            if (targetRoomId) {
+              const statusPayload = {
+                messageId: updatedMsg._id,
+                metaMessageId,
+                status: deliveryStatus,
+                roomId: targetRoomId,
+                timestamp: statusDate,
+                failureReason: updateData.failureReason || null,
+              };
+
+              io.to(targetRoomId).emit("messageStatusUpdate", statusPayload);
+              io.to("admin_global_room").emit("messageStatusUpdate", statusPayload);
+
+              if (deliveryStatus === "read") {
+                io.to(targetRoomId).emit("messagesRead", { roomId: targetRoomId });
+                io.to("admin_global_room").emit("messagesRead", { roomId: targetRoomId });
+              }
+
+              if (deliveryStatus === "failed") {
+                io.to(targetRoomId).emit("messageDeliveryFailed", {
+                  roomId: targetRoomId,
+                  code: statusItem.errors?.[0]?.code || "DELIVERY_FAILED",
+                  message: updateData.failureReason,
+                });
+                io.to("admin_global_room").emit("messageDeliveryFailed", {
+                  roomId: targetRoomId,
+                  code: statusItem.errors?.[0]?.code || "DELIVERY_FAILED",
+                  message: updateData.failureReason,
+                });
+              }
+            }
+          }
         }
       }
 
@@ -248,10 +452,19 @@ export const sendWhatsAppMessage = async (req, res) => {
   try {
     const { roomId, recipientId, text } = req.body;
 
-    const recipientPhone = recipientId || (roomId?.startsWith("wa_") ? roomId.replace("wa_", "") : null);
+    let targetRecipient = recipientId || (roomId?.startsWith("wa_") ? roomId.replace("wa_", "") : null);
 
-    if (!recipientPhone || !text) {
-      return res.status(400).json({ success: false, message: "Recipient phone number and text are required" });
+    if (!targetRecipient || targetRecipient === "admin" || targetRecipient === "undefined") {
+      if (roomId) {
+        const conv = await conversationCollection.findOne({ roomId });
+        if (conv?.customer) {
+          targetRecipient = conv.customer.phone || conv.customer.bsuid || conv.platformId;
+        }
+      }
+    }
+
+    if (!targetRecipient || targetRecipient === "undefined" || !text) {
+      return res.status(400).json({ success: false, message: "Valid recipient and text are required" });
     }
 
     const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
@@ -264,18 +477,29 @@ export const sendWhatsAppMessage = async (req, res) => {
       });
     }
 
+    // Official Meta logic:
+    // If phone number -> use 'to'
+    // If BSUID (users with hidden phone numbers / usernames) -> use 'recipient'
+    const isPhoneNumber = /^\+?[0-9]+$/.test(String(targetRecipient).trim());
+    const waPayload = {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      type: "text",
+      text: { preview_url: false, body: text },
+    };
+
+    if (isPhoneNumber) {
+      waPayload.to = String(targetRecipient).replace(/[^0-9]/g, "");
+    } else {
+      waPayload.recipient = String(targetRecipient).trim();
+    }
+
     // Call WhatsApp Cloud API
     let waRes;
     try {
       waRes = await axios.post(
         `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`,
-        {
-          messaging_product: "whatsapp",
-          recipient_type: "individual",
-          to: recipientPhone.replace(/[^0-9]/g, ""),
-          type: "text",
-          text: { preview_url: false, body: text },
-        },
+        waPayload,
         {
           headers: {
             Authorization: `Bearer ${accessToken}`,
@@ -293,14 +517,15 @@ export const sendWhatsAppMessage = async (req, res) => {
     }
 
     const messageData = {
-      roomId: roomId || `wa_${recipientPhone}`,
+      roomId: roomId || `wa_${targetRecipient}`,
       platform: "whatsapp",
       senderId: "admin",
       senderRole: "admin",
-      receiverId: recipientPhone,
+      receiverId: targetRecipient,
       text,
       attachments: [],
-      isRead: true,
+      isRead: false,
+      deliveryStatus: "sent",
       metaMessageId: waRes.data?.messages?.[0]?.id,
       createdAt: new Date(),
     };
@@ -342,7 +567,7 @@ export const sendWhatsAppMessage = async (req, res) => {
 export const getWhatsAppConversations = async (req, res) => {
   try {
     const conversations = await conversationCollection
-      .find({ platform: "whatsapp" })
+      .find({ platform: "whatsapp", roomId: { $ne: "wa_undefined" } })
       .sort({ updatedAt: -1 })
       .toArray();
 

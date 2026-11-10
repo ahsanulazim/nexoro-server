@@ -12,6 +12,7 @@ import {
   formatWhatsAppMediaPayload,
   sendMetaMessage,
 } from "../utils/channelMediaAdapter.js";
+import { markWhatsAppMessageAsRead } from "../controllers/whatsappController.js";
 
 const app = express();
 const server = http.createServer(app);
@@ -64,7 +65,7 @@ io.on("connection", async (socket) => {
   const msgCollection = client.db("nexoro").collection("Messages");
 
   try {
-    await userCollection.updateOne({ _id }, { $set: { online: true } });
+    await userCollection.updateOne({ _id }, { $set: { online: true, isOnline: true } });
 
     if (role === "customer") {
       onlineCustomers.add(_id);
@@ -149,6 +150,7 @@ io.on("connection", async (socket) => {
 
       // If staff is sending to Meta / WhatsApp, dispatch via external APIs
       let externalMetaId = null;
+      let sendFailure = null;
       if (isStaff) {
         const recipientId = receiverId || roomId.replace(/^(fb_|ig_|wa_)/, "");
 
@@ -187,51 +189,104 @@ io.on("connection", async (socket) => {
           const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
           const accessToken =
             process.env.WHATSAPP_ACCESS_TOKEN || process.env.FB_ACCESS_TOKEN;
-          if (phoneNumberId) {
-            try {
-              const cleanPhone = recipientId.replace(/[^0-9]/g, "");
-              if (text && text.trim() !== "" && attachments.length === 0) {
-                const waRes = await axios.post(
-                  `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`,
-                  {
-                    messaging_product: "whatsapp",
-                    recipient_type: "individual",
-                    to: cleanPhone,
-                    type: "text",
-                    text: { preview_url: false, body: text },
-                  },
-                  {
-                    headers: {
-                      Authorization: `Bearer ${accessToken}`,
-                      "Content-Type": "application/json",
-                    },
-                  }
-                );
-                externalMetaId = waRes.data?.messages?.[0]?.id;
+          if (!phoneNumberId) {
+            socket.emit("messageDeliveryFailed", {
+              roomId,
+              code: "WHATSAPP_CONFIG_MISSING",
+              message: "WHATSAPP_PHONE_NUMBER_ID is not configured in backend .env",
+            });
+            return;
+          }
+
+          try {
+            // Find target recipient: prefer phone if available, else BSUID
+            let targetRecipient = recipientId;
+            if (!targetRecipient || targetRecipient === "admin" || targetRecipient === "undefined") {
+              targetRecipient = roomId.replace(/^wa_/, "");
+            }
+
+            const conv = await conversationCollection.findOne({ roomId });
+            if (conv?.customer) {
+              if (conv.customer.phone && /^\+?[0-9]+$/.test(conv.customer.phone)) {
+                targetRecipient = conv.customer.phone;
+              } else if (conv.customer.bsuid) {
+                targetRecipient = conv.customer.bsuid;
+              } else if (conv.platformId && conv.platformId !== "undefined") {
+                targetRecipient = conv.platformId;
+              }
+            }
+
+            const isPhone = /^\+?[0-9]+$/.test(String(targetRecipient).trim());
+            const waTarget = isPhone
+              ? String(targetRecipient).replace(/[^0-9]/g, "")
+              : String(targetRecipient).trim();
+
+            if (text && text.trim() !== "" && attachments.length === 0) {
+              const waTextPayload = {
+                messaging_product: "whatsapp",
+                recipient_type: "individual",
+                type: "text",
+                text: { preview_url: false, body: text },
+              };
+              if (isPhone) {
+                waTextPayload.to = waTarget;
+              } else {
+                waTextPayload.recipient = waTarget;
               }
 
-              for (let i = 0; i < attachments.length; i++) {
-                const att = attachments[i];
-                const caption = i === 0 ? text : "";
-                const payload = formatWhatsAppMediaPayload(cleanPhone, att, caption);
-                const waMediaRes = await axios.post(
-                  `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`,
-                  payload,
-                  {
-                    headers: {
-                      Authorization: `Bearer ${accessToken}`,
-                      "Content-Type": "application/json",
-                    },
-                  }
-                );
-                if (!externalMetaId) externalMetaId = waMediaRes.data?.messages?.[0]?.id;
-              }
-            } catch (waErr) {
-              console.error(
-                "WhatsApp Cloud API send error:",
-                waErr.response?.data || waErr.message
+              const waRes = await axios.post(
+                `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`,
+                waTextPayload,
+                {
+                  headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                    "Content-Type": "application/json",
+                  },
+                }
               );
+              externalMetaId = waRes.data?.messages?.[0]?.id;
             }
+
+            for (let i = 0; i < attachments.length; i++) {
+              const att = attachments[i];
+              const caption = i === 0 ? text : "";
+              const payload = formatWhatsAppMediaPayload(targetRecipient, att, caption);
+              const waMediaRes = await axios.post(
+                `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`,
+                payload,
+                {
+                  headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                    "Content-Type": "application/json",
+                  },
+                }
+              );
+              if (!externalMetaId) externalMetaId = waMediaRes.data?.messages?.[0]?.id;
+            }
+          } catch (waErr) {
+            const errData = waErr.response?.data?.error;
+            const errCode = errData?.code;
+            const errMsg = errData?.message || waErr.message;
+            console.error(
+              "WhatsApp Cloud API send error:",
+              errData || waErr.message
+            );
+
+            const isWindowExpired = errCode === 131047;
+            const failureReason = isWindowExpired
+              ? "WhatsApp Policy: 24-hour response window has expired. Standard messages cannot be sent until customer replies."
+              : `WhatsApp send failed: ${errMsg}`;
+
+            socket.emit("messageDeliveryFailed", {
+              roomId,
+              code: isWindowExpired ? "OUTSIDE_ALLOWED_WINDOW" : "WHATSAPP_API_ERROR",
+              message: failureReason,
+            });
+
+            sendFailure = {
+              status: "failed",
+              reason: failureReason,
+            };
           }
         }
       }
@@ -261,7 +316,13 @@ io.on("connection", async (socket) => {
           : "admin",
         text,
         attachments,
-        isRead: isStaff ? true : false,
+        isRead: false,
+        deliveryStatus: sendFailure
+          ? "failed"
+          : externalMetaId
+          ? "sent"
+          : "sent",
+        failureReason: sendFailure?.reason || null,
         externalMetaId,
         metaMessageId: externalMetaId,
         replyTo: replyTo
@@ -313,6 +374,7 @@ io.on("connection", async (socket) => {
       const updatedConv = convRes?.value ?? convRes;
 
       io.to(roomId).emit("receiveMessage", messageData);
+      io.to(ADMIN_ROOM).emit("receiveMessage", messageData);
 
       if (role === "customer") {
         const unreadCount =
@@ -324,7 +386,6 @@ io.on("connection", async (socket) => {
                 senderRole: "customer",
               });
 
-        io.to(ADMIN_ROOM).emit("receiveMessage", messageData);
         io.to(ADMIN_ROOM).emit("newConversationUpdate", {
           roomId,
           lastMessage: lastMessageText,
@@ -379,6 +440,29 @@ io.on("connection", async (socket) => {
 
     if (isStaff) {
       io.to(ADMIN_ROOM).emit("updateUnreadCount", { roomId, count: 0 });
+
+      // If staff is reading a WhatsApp conversation, notify WhatsApp Cloud API for blue ticks
+      if (roomId.startsWith("wa_") || String(roomId).includes("wa_")) {
+        try {
+          const unreadWaMsgs = await msgCollection
+            .find({
+              roomId,
+              senderRole: "customer",
+              metaMessageId: { $exists: true, $ne: null },
+            })
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .toArray();
+
+          for (const waMsg of unreadWaMsgs) {
+            if (waMsg.metaMessageId) {
+              markWhatsAppMessageAsRead(waMsg.metaMessageId);
+            }
+          }
+        } catch (markErr) {
+          console.error("Error in markWhatsAppMessageAsRead:", markErr);
+        }
+      }
     }
   });
 
@@ -412,7 +496,7 @@ io.on("connection", async (socket) => {
     console.log(`user disconnected: ${_id}`);
 
     try {
-      await userCollection.updateOne({ _id }, { $set: { isOnline: false } });
+      await userCollection.updateOne({ _id }, { $set: { online: false, isOnline: false } });
 
       if (role === "customer") {
         onlineCustomers.delete(_id);

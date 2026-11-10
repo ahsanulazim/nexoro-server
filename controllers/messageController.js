@@ -41,8 +41,9 @@ const extractContactInfoFromMessages = (messages = [], roomId = "", platform = "
 
   const cleanRoom = String(roomId || "").replace(/^(fb_|ig_|wa_|room_)/, "");
   if (platform === "whatsapp" || String(roomId).startsWith("wa_")) {
+    const isDigitsOnly = /^\+?[0-9]+$/.test(cleanRoom);
     const waDigits = cleanRoom.replace(/[^0-9]/g, "");
-    if (waDigits.length >= 8) {
+    if (isDigitsOnly && waDigits.length >= 8) {
       detectedPhone = `+${waDigits}`;
     }
   }
@@ -93,7 +94,7 @@ const extractContactInfoFromMessages = (messages = [], roomId = "", platform = "
 /**
  * Helper: Find matching Client in Clients collection by clientId, email, phone, or roomId
  */
-const findMatchingClient = async ({ clientId, email, phone, roomId, platformId }) => {
+const findMatchingClient = async ({ clientId, email, phone, roomId, platformId, bsuid }) => {
   const orConditions = [];
 
   if (clientId && ObjectId.isValid(String(clientId))) {
@@ -116,6 +117,12 @@ const findMatchingClient = async ({ clientId, email, phone, roomId, platformId }
 
   if (platformId) {
     orConditions.push({ platformId: String(platformId) });
+    orConditions.push({ bsuid: String(platformId) });
+  }
+
+  if (bsuid) {
+    orConditions.push({ bsuid: String(bsuid) });
+    orConditions.push({ platformId: String(bsuid) });
   }
 
   if (phone) {
@@ -319,6 +326,17 @@ export const sendMessage = async (req, res) => {
     else if (roomId.startsWith("ig_")) platform = "instagram";
     else if (roomId.startsWith("wa_")) platform = "whatsapp";
 
+    // Check if conversation is blocked
+    const existingConvCheck = await conversationCollection.findOne({ roomId });
+    if (existingConvCheck?.isBlocked) {
+      return res.status(403).json({
+        success: false,
+        message: isStaff
+          ? "This customer is currently blocked. Please unblock before sending messages."
+          : "You have been blocked from sending messages.",
+      });
+    }
+
     // Validate attachments for target platform
     for (const att of attachments) {
       const v = validateAttachmentForChannel(att, platform);
@@ -375,56 +393,99 @@ export const sendMessage = async (req, res) => {
         const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
         const accessToken =
           process.env.WHATSAPP_ACCESS_TOKEN || process.env.FB_ACCESS_TOKEN;
-        if (phoneNumberId) {
-          try {
-            const cleanPhone = recipientId.replace(/[^0-9]/g, "");
+        if (!phoneNumberId) {
+          return res.status(503).json({
+            success: false,
+            message: "WHATSAPP_PHONE_NUMBER_ID is not configured in backend .env",
+          });
+        }
 
-            // Send text message if text exists
-            if (hasText && (!hasAttachments || attachments.length === 0)) {
-              const waRes = await axios.post(
-                `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`,
-                {
-                  messaging_product: "whatsapp",
-                  recipient_type: "individual",
-                  to: cleanPhone,
-                  type: "text",
-                  text: { preview_url: false, body: text },
-                },
-                {
-                  headers: {
-                    Authorization: `Bearer ${accessToken}`,
-                    "Content-Type": "application/json",
-                  },
-                }
-              );
-              externalMetaId = waRes.data?.messages?.[0]?.id;
-            }
-
-            // Send attachments to WhatsApp
-            for (let idx = 0; idx < attachments.length; idx++) {
-              const att = attachments[idx];
-              // First attachment gets the text as caption if available
-              const caption = idx === 0 ? text : "";
-              const payload = formatWhatsAppMediaPayload(cleanPhone, att, caption);
-
-              const waMediaRes = await axios.post(
-                `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`,
-                payload,
-                {
-                  headers: {
-                    Authorization: `Bearer ${accessToken}`,
-                    "Content-Type": "application/json",
-                  },
-                }
-              );
-              if (!externalMetaId) externalMetaId = waMediaRes.data?.messages?.[0]?.id;
-            }
-          } catch (waErr) {
-            console.error(
-              "WhatsApp Cloud API send error:",
-              waErr.response?.data || waErr.message
-            );
+        try {
+          let targetRecipient = recipientId;
+          if (!targetRecipient || targetRecipient === "admin" || targetRecipient === "undefined") {
+            targetRecipient = roomId.replace(/^wa_/, "");
           }
+
+          // Look up conversation in database to check if customer has known phone or BSUID
+          const conv = await conversationCollection.findOne({ roomId });
+          if (conv?.customer) {
+            if (conv.customer.phone && /^\+?[0-9]+$/.test(conv.customer.phone)) {
+              targetRecipient = conv.customer.phone;
+            } else if (conv.customer.bsuid) {
+              targetRecipient = conv.customer.bsuid;
+            } else if (conv.platformId && conv.platformId !== "undefined") {
+              targetRecipient = conv.platformId;
+            }
+          }
+
+          const isPhone = /^\+?[0-9]+$/.test(String(targetRecipient).trim());
+          const waTarget = isPhone
+            ? String(targetRecipient).replace(/[^0-9]/g, "")
+            : String(targetRecipient).trim();
+
+          // Send text message if text exists
+          if (hasText && (!hasAttachments || attachments.length === 0)) {
+            const waTextPayload = {
+              messaging_product: "whatsapp",
+              recipient_type: "individual",
+              type: "text",
+              text: { preview_url: false, body: text },
+            };
+            if (isPhone) {
+              waTextPayload.to = waTarget;
+            } else {
+              waTextPayload.recipient = waTarget;
+            }
+
+            const waRes = await axios.post(
+              `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`,
+              waTextPayload,
+              {
+                headers: {
+                  Authorization: `Bearer ${accessToken}`,
+                  "Content-Type": "application/json",
+                },
+              }
+            );
+            externalMetaId = waRes.data?.messages?.[0]?.id;
+          }
+
+          // Send attachments to WhatsApp
+          for (let idx = 0; idx < attachments.length; idx++) {
+            const att = attachments[idx];
+            // First attachment gets the text as caption if available
+            const caption = idx === 0 ? text : "";
+            const payload = formatWhatsAppMediaPayload(targetRecipient, att, caption);
+
+            const waMediaRes = await axios.post(
+              `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`,
+              payload,
+              {
+                headers: {
+                  Authorization: `Bearer ${accessToken}`,
+                  "Content-Type": "application/json",
+                },
+              }
+            );
+            if (!externalMetaId) externalMetaId = waMediaRes.data?.messages?.[0]?.id;
+          }
+        } catch (waErr) {
+          const errData = waErr.response?.data?.error;
+          const errCode = errData?.code;
+          const errMsg = errData?.message || waErr.message;
+          console.error(
+            "WhatsApp Cloud API send error:",
+            errData || waErr.message
+          );
+
+          const isWindowExpired = errCode === 131047;
+          return res.status(400).json({
+            success: false,
+            code: isWindowExpired ? "OUTSIDE_ALLOWED_WINDOW" : "WHATSAPP_API_ERROR",
+            message: isWindowExpired
+              ? "WhatsApp Policy: The 24-hour response window has expired for this user. You can only re-engage using an approved template message."
+              : `WhatsApp send failed: ${errMsg}`,
+          });
         }
       }
     }
@@ -440,6 +501,9 @@ export const sendMessage = async (req, res) => {
       text,
       attachments,
       isRead: false,
+      deliveryStatus: externalMetaId
+        ? "sent"
+        : "sent",
       externalMetaId,
       metaMessageId: externalMetaId,
       replyTo: replyToData
@@ -513,6 +577,7 @@ export const sendMessage = async (req, res) => {
     const updatedConv = convRes?.value ?? convRes;
 
     io.to(roomId).emit("receiveMessage", msgData);
+    io.to("admin_global_room").emit("receiveMessage", msgData);
 
     if (senderUser.role === "customer") {
       const unreadCount =
@@ -869,6 +934,220 @@ export const deleteConversation = async (req, res) => {
 };
 
 /**
+ * 4b. Toggle Block/Unblock Conversation (Cross-channel: Web, Facebook, Instagram, WhatsApp)
+ */
+export const toggleBlockConversation = async (req, res) => {
+  try {
+    const { roomId, reason } = req.body;
+    const decodedToken = req.user;
+
+    if (!roomId) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Room ID is required" });
+    }
+
+    const cleanId = String(roomId).replace(/^(fb_|ig_|wa_|room_)/, "");
+    const conv = await conversationCollection.findOne({
+      roomId: {
+        $in: [
+          roomId,
+          cleanId,
+          `fb_${cleanId}`,
+          `ig_${cleanId}`,
+          `wa_${cleanId}`,
+          `room_${cleanId}`,
+        ],
+      },
+    });
+
+    if (!conv) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Conversation not found" });
+    }
+
+    const targetRoomId = conv.roomId || roomId;
+    const newBlockedState = !Boolean(conv.isBlocked);
+    const platform =
+      conv.platform ||
+      (targetRoomId.startsWith("wa_")
+        ? "whatsapp"
+        : targetRoomId.startsWith("fb_")
+          ? "facebook"
+          : targetRoomId.startsWith("ig_")
+            ? "instagram"
+            : "web");
+
+    const staffUser = await userCollection.findOne({
+      email: decodedToken?.email,
+    });
+    const staffName =
+      staffUser?.name || staffUser?.userName || decodedToken?.email || "Staff";
+
+    // 1. Update Conversation in Database
+    await conversationCollection.updateOne(
+      { roomId: targetRoomId },
+      {
+        $set: {
+          isBlocked: newBlockedState,
+          blockedAt: newBlockedState ? new Date() : null,
+          blockedBy: newBlockedState
+            ? {
+                uid: decodedToken?.uid || null,
+                email: decodedToken?.email || null,
+                name: staffName,
+                role: staffUser?.role || "staff",
+              }
+            : null,
+          blockReason: newBlockedState ? (reason || "Blocked by staff") : null,
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    // 2. Insert timeline system audit event
+    const auditText = newBlockedState
+      ? `🚫 Contact was blocked by ${staffName}${reason ? ` (Reason: ${reason})` : ""}`
+      : `✅ Contact was unblocked by ${staffName}`;
+
+    const auditMsg = {
+      roomId: targetRoomId,
+      platform,
+      senderId: "system",
+      senderRole: "system",
+      receiverId: conv.customerId || "customer",
+      text: auditText,
+      isSystem: true,
+      createdAt: new Date(),
+    };
+    await msgCollection.insertOne(auditMsg);
+
+    // 3. Channel-Specific Platform Block API Sync
+    let channelSyncResult = { attempted: false, success: false, note: "" };
+
+    if (platform === "whatsapp" || targetRoomId.startsWith("wa_")) {
+      const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+      const accessToken =
+        process.env.WHATSAPP_ACCESS_TOKEN || process.env.FB_ACCESS_TOKEN;
+      let rawPhone =
+        conv.customer?.phone ||
+        conv.platformId ||
+        targetRoomId.replace(/^wa_/, "");
+      const cleanPhone = String(rawPhone).replace(/[^0-9]/g, "");
+
+      if (phoneNumberId && accessToken && cleanPhone.length >= 8) {
+        channelSyncResult.attempted = true;
+        try {
+          const endpoint = `https://graph.facebook.com/v26.0/${phoneNumberId}/block_users`;
+          if (newBlockedState) {
+            await axios.post(
+              endpoint,
+              { block_users: [{ phone_number: cleanPhone }] },
+              {
+                headers: {
+                  Authorization: `Bearer ${accessToken}`,
+                  "Content-Type": "application/json",
+                },
+              }
+            );
+          } else {
+            await axios.delete(endpoint, {
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                "Content-Type": "application/json",
+              },
+              data: { block_users: [{ phone_number: cleanPhone }] },
+            });
+          }
+          channelSyncResult.success = true;
+          channelSyncResult.note = "WhatsApp Cloud API blocklist synced";
+        } catch (waErr) {
+          console.warn(
+            "[WhatsApp Block API Sync Warning]",
+            waErr.response?.data || waErr.message
+          );
+          channelSyncResult.note =
+            waErr.response?.data?.error?.message || waErr.message;
+        }
+      }
+    } else if (
+      platform === "facebook" ||
+      platform === "instagram" ||
+      targetRoomId.startsWith("fb_") ||
+      targetRoomId.startsWith("ig_")
+    ) {
+      const pageId = process.env.FB_PAGE_ID;
+      const targetId =
+        conv.customer?.id ||
+        conv.platformId ||
+        targetRoomId.replace(/^(fb_|ig_)/, "");
+      if (pageId && targetId) {
+        channelSyncResult.attempted = true;
+        try {
+          await fbApi.post(`/${pageId}/moderate_conversations`, {
+            user_ids: [{ id: targetId }],
+            actions: [newBlockedState ? "block_user" : "unblock_user"],
+          });
+          channelSyncResult.success = true;
+          channelSyncResult.note = "Meta Moderate Conversations API synced";
+        } catch (metaErr) {
+          console.warn(
+            "[Meta Moderate Conversations API Warning]",
+            metaErr.response?.data || metaErr.message
+          );
+          channelSyncResult.note =
+            metaErr.response?.data?.error?.message || metaErr.message;
+        }
+      }
+    } else {
+      channelSyncResult = {
+        attempted: true,
+        success: true,
+        note: "Web chat internal block active",
+      };
+    }
+
+    // 4. Real-time Socket Updates
+    io.to(targetRoomId).emit("receiveMessage", auditMsg);
+    io.to(targetRoomId).emit("conversationBlockStatusUpdated", {
+      roomId: targetRoomId,
+      isBlocked: newBlockedState,
+      blockedAt: newBlockedState ? new Date() : null,
+      blockedBy: staffName,
+      blockReason: reason || null,
+    });
+    io.to("admin_global_room").emit("conversationBlockStatusUpdated", {
+      roomId: targetRoomId,
+      isBlocked: newBlockedState,
+      blockedAt: newBlockedState ? new Date() : null,
+      blockedBy: staffName,
+      blockReason: reason || null,
+    });
+    io.to("admin_global_room").emit("newConversationUpdate", {
+      roomId: targetRoomId,
+      isBlocked: newBlockedState,
+      lastMessage: auditText,
+      updatedAt: new Date(),
+    });
+
+    return res.status(200).json({
+      success: true,
+      isBlocked: newBlockedState,
+      message: newBlockedState
+        ? "Contact blocked successfully"
+        : "Contact unblocked successfully",
+      channelSync: channelSyncResult,
+    });
+  } catch (error) {
+    console.error("Error in toggleBlockConversation:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Internal server error" });
+  }
+};
+
+/**
  * 5. Fetch Customer CRM Details for Right Side Panel (with Smart Chat Extraction & Client Matching)
  */
 export const getCustomerCRMDetails = async (req, res) => {
@@ -984,7 +1263,8 @@ export const getCustomerCRMDetails = async (req, res) => {
         ...customerData,
         clientId: matchedClientId,
         name: existingClient.name || customerData.name || customerData.userName,
-        userName: existingClient.name || customerData.userName || customerData.name,
+        userName: conversation.customer?.userName || customerData.userName || existingClient.userName || existingClient.name,
+        bsuid: conversation.customer?.bsuid || existingClient.bsuid || null,
         email: customerEmail || realClientEmail || null,
         phone: customerPhone || existingClient.phone || null,
         company: existingClient.company || customerData.company || null,
@@ -1122,6 +1402,10 @@ export const getCustomerCRMDetails = async (req, res) => {
         extractedInfo,
         platform,
         roomId: conversation.roomId || roomId,
+        isBlocked: Boolean(conversation.isBlocked),
+        blockedAt: conversation.blockedAt || null,
+        blockedBy: conversation.blockedBy || null,
+        blockReason: conversation.blockReason || null,
         notes: conversation.internalNotes || [],
         ordersCount: orders.length,
         totalSpent,
@@ -1241,10 +1525,11 @@ export const confirmOrderFromChat = async (req, res) => {
             : "Individual / Self");
     const resolvedRole = (clientRole || "").trim() || "Client";
     const resolvedCountry = (country || "").trim() || "Bangladesh";
+    const isCleanIdDigits = /^\+?[0-9]+$/.test(cleanId);
     const resolvedPhone =
       (clientPhone || "").trim() ||
       conversation?.customer?.phone ||
-      (platform === "whatsapp" ? `+${cleanId.replace(/[^0-9]/g, "")}` : "");
+      (platform === "whatsapp" && isCleanIdDigits ? `+${cleanId.replace(/[^0-9]/g, "")}` : "");
     const cleanEmail = (clientEmail || "").trim().toLowerCase();
 
     // --- STEP 1: Find or Create Client in Clients Collection ---
@@ -1254,6 +1539,7 @@ export const confirmOrderFromChat = async (req, res) => {
       phone: resolvedPhone,
       roomId: canonicalRoomId,
       platformId: conversation?.platformId || cleanId,
+      bsuid: conversation?.customer?.bsuid || (!isCleanIdDigits ? cleanId : null),
     });
 
     let finalClient = null;
@@ -1268,6 +1554,9 @@ export const confirmOrderFromChat = async (req, res) => {
         country: resolvedCountry || existingClient.country || "Bangladesh",
         roomId: existingClient.roomId || canonicalRoomId,
         platform: existingClient.platform || platform,
+        platformId: existingClient.platformId || conversation?.platformId || cleanId,
+        userName: conversation?.customer?.userName || existingClient.userName || null,
+        bsuid: conversation?.customer?.bsuid || existingClient.bsuid || null,
         updatedAt: new Date(),
       };
 
@@ -1323,6 +1612,8 @@ export const confirmOrderFromChat = async (req, res) => {
         roomId: canonicalRoomId,
         platform,
         platformId: conversation?.platformId || cleanId,
+        userName: conversation?.customer?.userName || null,
+        bsuid: conversation?.customer?.bsuid || (platform === "whatsapp" && !isCleanIdDigits ? cleanId : null),
         joined: new Date(),
       };
 
@@ -1460,7 +1751,8 @@ export const confirmOrderFromChat = async (req, res) => {
       _id: conversation?.customer?._id || cleanId,
       clientId: finalClientId,
       name: resolvedName,
-      userName: resolvedName,
+      userName: conversation?.customer?.userName || resolvedName,
+      bsuid: conversation?.customer?.bsuid || finalClient.bsuid || null,
       email: !isPlaceholderClientEmail(finalClient.email)
         ? finalClient.email
         : conversation?.customer?.email || null,
@@ -1644,6 +1936,90 @@ export const deleteInternalNote = async (req, res) => {
     return res
       .status(500)
       .json({ success: false, message: "Internal server error" });
+  }
+};
+
+/**
+ * 7b. Update CRM Customer / Client Profile from Inbox
+ */
+export const updateCRMProfile = async (req, res) => {
+  try {
+    const { roomId, name, email, phone, company, role, country, userName } = req.body;
+    if (!roomId) {
+      return res.status(400).json({ success: false, message: "Room ID is required" });
+    }
+
+    const cleanId = String(roomId).replace(/^(fb_|ig_|wa_|room_)/, "");
+    const roomQuery = {
+      $in: [roomId, cleanId, `fb_${cleanId}`, `ig_${cleanId}`, `wa_${cleanId}`, `room_${cleanId}`],
+    };
+
+    const conversation = await conversationCollection.findOne({ roomId: roomQuery });
+    if (!conversation) {
+      return res.status(404).json({ success: false, message: "Conversation not found" });
+    }
+
+    const currentCustomer = conversation.customer || {};
+    const updatedCustomerObj = {
+      ...currentCustomer,
+      name: name !== undefined ? String(name).trim() : currentCustomer.name,
+      userName: userName !== undefined ? String(userName).trim() : currentCustomer.userName,
+      email: email !== undefined ? (String(email).trim().toLowerCase() || null) : currentCustomer.email,
+      phone: phone !== undefined ? (String(phone).trim() || null) : currentCustomer.phone,
+      company: company !== undefined ? String(company).trim() : currentCustomer.company,
+      clientRole: role !== undefined ? String(role).trim() : (currentCustomer.clientRole || "Client"),
+      country: country !== undefined ? String(country).trim() : currentCustomer.country,
+      updatedAt: new Date(),
+    };
+
+    // 1. Update Conversation
+    await conversationCollection.updateOne(
+      { _id: conversation._id },
+      {
+        $set: {
+          customer: updatedCustomerObj,
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    // 2. If this conversation is linked to a Client in Clients collection, sync client profile
+    let matchedClientId = conversation.clientId || currentCustomer.clientId;
+    if (matchedClientId && ObjectId.isValid(String(matchedClientId))) {
+      const clientUpdate = { updatedAt: new Date() };
+      if (name) clientUpdate.name = String(name).trim();
+      if (email && !isPlaceholderClientEmail(email)) clientUpdate.email = String(email).trim().toLowerCase();
+      if (phone !== undefined) clientUpdate.phone = String(phone).trim();
+      if (company !== undefined) clientUpdate.company = String(company).trim();
+      if (role !== undefined) clientUpdate.role = String(role).trim();
+      if (country !== undefined) clientUpdate.country = String(country).trim();
+      if (userName !== undefined) clientUpdate.userName = String(userName).trim();
+
+      await clientCollection.updateOne(
+        { _id: new ObjectId(String(matchedClientId)) },
+        { $set: clientUpdate }
+      );
+    }
+
+    // 3. Emit socket event so UI header, sidebar, and CRM panel update live
+    io.to("admin_global_room").emit("newConversationUpdate", {
+      roomId: conversation.roomId,
+      platform: conversation.platform || "web",
+      customerId: conversation.customerId || cleanId,
+      clientId: matchedClientId,
+      isClient: Boolean(conversation.isClient || matchedClientId),
+      customer: updatedCustomerObj,
+      updatedAt: new Date(),
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "CRM Profile updated successfully",
+      data: updatedCustomerObj,
+    });
+  } catch (error) {
+    console.error("Error updating CRM profile:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
 
