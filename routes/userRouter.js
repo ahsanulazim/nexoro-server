@@ -6,6 +6,7 @@ import {
   getAllMembers,
   getAllUsers,
   getAssignableUsers,
+  getMemberProfileStats,
   getPermissionConfig,
   getUser,
   promoteUser,
@@ -23,6 +24,7 @@ router.get("/getUser", verifyId, getUser);
 router.get("/", verifyId, verifyAdmin, getAllUsers);
 router.get("/team/members", getAllMembers);
 router.get("/assignable", verifyId, getAssignableUsers);
+router.get("/profile-stats/:id", verifyId, verifyAdmin, getMemberProfileStats);
 router.get("/permissions/config", verifyId, getPermissionConfig);
 router.put("/permissions", verifyId, verifyAdmin, updateMemberPermissions);
 router.put("/updateUser", verifyId, updateUser);

@@ -21,7 +21,7 @@ export const downloadAndUploadWhatsAppMedia = async (mediaId, defaultName = "wha
     if (!accessToken || !mediaId) return null;
 
     // 1. Query WhatsApp Cloud API to get the download URL
-    const mediaRes = await axios.get(`https://graph.facebook.com/v26.0/${mediaId}`, {
+    const mediaRes = await axios.get(`https://graph.facebook.com/v22.0/${mediaId}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
 
@@ -71,7 +71,7 @@ export const markWhatsAppMessageAsRead = async (metaMessageId) => {
     if (!phoneNumberId || !accessToken || !metaMessageId) return;
 
     await axios.post(
-      `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`,
+      `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`,
       {
         messaging_product: "whatsapp",
         status: "read",
@@ -172,9 +172,79 @@ export const handleWhatsAppWebhook = async (req, res) => {
 
             let text = "";
             let attachments = [];
+            let flowData = null;
 
             if (msg.type === "text") {
               text = msg.text?.body || "";
+            } else if (msg.type === "interactive") {
+              const interactiveType = msg.interactive?.type;
+
+              if (interactiveType === "nfm_reply") {
+                // WhatsApp Flow / Form Submission from Meta Ads
+                const nfmReply = msg.interactive?.nfm_reply;
+                let parsedJson = null;
+
+                if (nfmReply?.response_json) {
+                  try {
+                    parsedJson =
+                      typeof nfmReply.response_json === "string"
+                        ? JSON.parse(nfmReply.response_json)
+                        : nfmReply.response_json;
+                  } catch (e) {
+                    parsedJson = { response: nfmReply.response_json };
+                  }
+                }
+
+                flowData = parsedJson;
+
+                if (parsedJson && typeof parsedJson === "object" && Object.keys(parsedJson).length > 0) {
+                  const lines = Object.entries(parsedJson).map(([key, val]) => {
+                    const formattedKey = key
+                      .replace(/_/g, " ")
+                      .replace(/\b\w/g, (char) => char.toUpperCase());
+                    const displayVal =
+                      val !== null && typeof val === "object"
+                        ? JSON.stringify(val)
+                        : String(val ?? "");
+                    return `• ${formattedKey}: ${displayVal}`;
+                  });
+
+                  text = `📋 WhatsApp Form Submission:\n${lines.join("\n")}`;
+                } else {
+                  text = nfmReply?.body ? `📋 Form: ${nfmReply.body}` : "📋 Submitted WhatsApp Form";
+                }
+              } else if (interactiveType === "button_reply") {
+                const btnTitle = msg.interactive?.button_reply?.title || "Option";
+                text = `🔘 ${btnTitle}`;
+              } else if (interactiveType === "list_reply") {
+                const listTitle = msg.interactive?.list_reply?.title || "Option";
+                const listDesc = msg.interactive?.list_reply?.description
+                  ? ` - ${msg.interactive.list_reply.description}`
+                  : "";
+                text = `🔘 Selected: ${listTitle}${listDesc}`;
+              } else {
+                text =
+                  msg.interactive?.button_reply?.title ||
+                  msg.interactive?.list_reply?.title ||
+                  msg.interactive?.nfm_reply?.body ||
+                  `Interactive (${interactiveType || "reply"}) message`;
+              }
+            } else if (msg.type === "button") {
+              // Quick reply template button
+              text = `🔘 ${msg.button?.text || msg.button?.payload || "Clicked button"}`;
+            } else if (msg.type === "location") {
+              const loc = msg.location;
+              const locName = loc?.name || loc?.address || "Shared Location";
+              const mapLink =
+                loc?.latitude && loc?.longitude
+                  ? `https://maps.google.com/?q=${loc.latitude},${loc.longitude}`
+                  : "";
+              text = `📍 Location: ${locName}${mapLink ? `\n${mapLink}` : ""}`;
+            } else if (msg.type === "contacts") {
+              const contactObj = msg.contacts?.[0];
+              const cName = contactObj?.name?.formatted_name || "Contact";
+              const cPhone = contactObj?.phones?.[0]?.phone || "";
+              text = `👤 Contact: ${cName}${cPhone ? ` (${cPhone})` : ""}`;
             } else if (msg.type === "image") {
               text = msg.image?.caption || "📷 Sent a photo";
               const mediaUpload = await downloadAndUploadWhatsAppMedia(msg.image?.id, "whatsapp_image.jpg");
@@ -214,6 +284,23 @@ export const handleWhatsAppWebhook = async (req, res) => {
               });
             } else {
               text = `Sent a ${msg.type} message`;
+            }
+
+            // Append Meta Ads Referral info if customer came from a Click-to-WhatsApp Ad
+            if (msg.referral) {
+              const adTitle = msg.referral.headline || msg.referral.body || "";
+              const adTag = adTitle ? `\n\n📢 [Source: Meta Ad - "${adTitle}"]` : "\n\n📢 [Source: Meta Ad]";
+              if (!text.includes("[Source: Meta Ad")) {
+                text = `${text}${adTag}`;
+              }
+            }
+
+            // If customer submitted name in Flow form, auto-enrich customer profile name
+            if (flowData && typeof flowData === "object") {
+              const formName = flowData.name || flowData.full_name || flowData.userName || flowData.customer_name;
+              if (formName && (!profileName || customerName.startsWith("WhatsApp"))) {
+                customerName = String(formName).trim();
+              }
             }
 
             // 2. Query existing conversation by BSUID, Phone, or Username (ignoring corrupted wa_undefined)
@@ -272,6 +359,9 @@ export const handleWhatsAppWebhook = async (req, res) => {
               isRead: false,
               metaMessageId: msg.id || null,
               createdAt: new Date(timestamp),
+              ...(flowData ? { flowData } : {}),
+              ...(msg.referral ? { referral: msg.referral } : {}),
+              ...(msg.interactive ? { interactiveType: msg.interactive.type } : {}),
             };
 
             // 1. Save message to DB
@@ -284,6 +374,7 @@ export const handleWhatsAppWebhook = async (req, res) => {
               userName: finalUsername ? `@${finalUsername}` : customerName,
               phone: finalPhone ? `+${finalPhone}` : (existingConv?.customer?.phone || null),
               bsuid: finalBsuid || existingConv?.customer?.bsuid || null,
+              email: flowData?.email || existingConv?.customer?.email || null,
               avatar: null,
             };
 
@@ -301,6 +392,7 @@ export const handleWhatsAppWebhook = async (req, res) => {
                     ...(existingConv?.customer || {}),
                     ...customerObj,
                   },
+                  ...(msg.referral ? { referral: msg.referral } : {}),
                 },
                 $setOnInsert: {
                   createdAt: new Date(timestamp),
@@ -318,7 +410,8 @@ export const handleWhatsAppWebhook = async (req, res) => {
               if (finalPhone) clientSync.phone = `+${finalPhone}`;
               if (finalBsuid) clientSync.bsuid = finalBsuid;
               if (finalUsername) clientSync.userName = `@${finalUsername}`;
-              if (profileName) clientSync.name = profileName;
+              if (profileName || (flowData && (flowData.name || flowData.full_name))) clientSync.name = customerName;
+              if (flowData?.email) clientSync.email = flowData.email;
 
               await clientCollection.updateOne(
                 { _id: new ObjectId(String(targetClientId)) },
@@ -338,6 +431,7 @@ export const handleWhatsAppWebhook = async (req, res) => {
               platform: "whatsapp",
               customer: customerObj,
               unreadCount: typeof updatedConv?.unreadCount === "number" ? updatedConv.unreadCount : 1,
+              referral: updatedConv?.referral || msg.referral || null,
             });
 
             const unreadCount =
@@ -432,6 +526,125 @@ export const handleWhatsAppWebhook = async (req, res) => {
               }
             }
           }
+
+          // 6. Process WhatsApp Calling Events (Meta Cloud API Calling)
+          const calls = value?.calls || [];
+          for (const call of calls) {
+            const callId = call.id;
+            const event = call.event; // "connect" | "terminate"
+            const direction = call.direction; // "USER_INITIATED" | "BUSINESS_INITIATED"
+            const rawPhone = call.from ? String(call.from).replace(/[^0-9]/g, "") : null;
+            const targetPhone = call.to ? String(call.to).replace(/[^0-9]/g, "") : null;
+            const customerPhone = direction === "BUSINESS_INITIATED" ? targetPhone : rawPhone;
+            const roomId = customerPhone ? `wa_${customerPhone}` : null;
+
+            const contact =
+              (value?.contacts || []).find((c) => {
+                if (customerPhone && c.wa_id && String(c.wa_id).replace(/[^0-9]/g, "") === customerPhone) return true;
+                return false;
+              }) || (value?.contacts || [])[0];
+
+            const customerName = contact?.profile?.name || (customerPhone ? `+${customerPhone}` : "WhatsApp Caller");
+
+            if (event === "connect") {
+              if (direction === "USER_INITIATED") {
+                // Incoming call from WhatsApp customer
+                const sdpOffer = call.session?.sdp;
+                const callPayload = {
+                  callId,
+                  from: customerPhone || call.from,
+                  customerName,
+                  roomId,
+                  sdpOffer,
+                  sdpType: call.session?.sdp_type || "offer",
+                  timestamp: parseInt(call.timestamp) * 1000 || Date.now(),
+                };
+
+                console.log(`[WhatsApp Calling] Inbound call received from ${customerName} (${callId})`);
+
+                io.to("admin_global_room").emit("whatsapp:incoming_call", callPayload);
+                if (roomId) io.to(roomId).emit("whatsapp:incoming_call", callPayload);
+
+                await createAndSendNotification({
+                  type: "new_message",
+                  title: "Incoming WhatsApp Call",
+                  message: `Call from ${customerName}`,
+                  link: roomId ? `/dashboard/inbox/whatsapp/${roomId}` : "/dashboard/inbox",
+                  recipientRole: "staff",
+                });
+              } else if (direction === "BUSINESS_INITIATED") {
+                // Outbound call answered by customer
+                const sdpAnswer = call.session?.sdp;
+                const connectedPayload = {
+                  callId,
+                  to: customerPhone || call.to,
+                  sdpAnswer,
+                  sdpType: call.session?.sdp_type || "answer",
+                  timestamp: parseInt(call.timestamp) * 1000 || Date.now(),
+                };
+
+                console.log(`[WhatsApp Calling] Outbound call connected to ${customerPhone} (${callId})`);
+
+                io.to("admin_global_room").emit("whatsapp:call_connected", connectedPayload);
+                if (roomId) io.to(roomId).emit("whatsapp:call_connected", connectedPayload);
+              }
+            } else if (event === "terminate") {
+              const durationSec = parseInt(call.duration) || 0;
+              const isCompleted = call.status === "COMPLETED";
+              const durationFormatted = durationSec > 0
+                ? `${Math.floor(durationSec / 60)}m ${durationSec % 60}s`
+                : "Missed";
+
+              const callNotice = isCompleted && durationSec > 0
+                ? `📞 WhatsApp Voice Call (${durationFormatted})`
+                : (direction === "BUSINESS_INITIATED" ? `📞 Outgoing WhatsApp Call Unanswered` : `📞 Missed WhatsApp Call`);
+
+              if (roomId) {
+                const callLogMessage = {
+                  roomId,
+                  platform: "whatsapp",
+                  senderId: direction === "BUSINESS_INITIATED" ? "admin" : (customerPhone || "customer"),
+                  senderRole: direction === "BUSINESS_INITIATED" ? "admin" : "customer",
+                  receiverId: direction === "BUSINESS_INITIATED" ? customerPhone : "admin",
+                  text: callNotice,
+                  isCallLog: true,
+                  callStatus: call.status || "COMPLETED",
+                  callDuration: durationSec,
+                  metaCallId: callId,
+                  isRead: true,
+                  createdAt: new Date(),
+                };
+
+                await msgCollection.insertOne(callLogMessage);
+                await conversationCollection.updateOne(
+                  { roomId },
+                  {
+                    $set: {
+                      lastMessage: callNotice,
+                      updatedAt: new Date(),
+                      platform: "whatsapp",
+                    },
+                  },
+                  { upsert: true }
+                );
+
+                io.to(roomId).emit("receiveMessage", callLogMessage);
+                io.to("admin_global_room").emit("receiveMessage", callLogMessage);
+              }
+
+              const terminatedPayload = {
+                callId,
+                status: call.status,
+                duration: durationSec,
+                roomId,
+              };
+
+              console.log(`[WhatsApp Calling] Call terminated (${callId}) - status: ${call.status}, duration: ${durationSec}s`);
+
+              io.to("admin_global_room").emit("whatsapp:call_terminated", terminatedPayload);
+              if (roomId) io.to(roomId).emit("whatsapp:call_terminated", terminatedPayload);
+            }
+          }
         }
       }
 
@@ -498,7 +711,7 @@ export const sendWhatsAppMessage = async (req, res) => {
     let waRes;
     try {
       waRes = await axios.post(
-        `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`,
+        `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`,
         waPayload,
         {
           headers: {
@@ -575,5 +788,265 @@ export const getWhatsAppConversations = async (req, res) => {
   } catch (error) {
     console.error("Error fetching WhatsApp conversations:", error);
     return res.status(500).json({ error: "Failed to fetch conversations" });
+  }
+};
+
+/**
+ * 5. Initiate Outbound WhatsApp Call (Meta Cloud API Calling)
+ */
+export const initiateWhatsAppCall = async (req, res) => {
+  try {
+    const { to, offerSdp, roomId } = req.body;
+    if (!to || !offerSdp) {
+      return res.status(400).json({
+        success: false,
+        message: "Recipient ('to') and WebRTC 'offerSdp' are required",
+      });
+    }
+
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+    const accessToken = process.env.WHATSAPP_ACCESS_TOKEN || process.env.FB_ACCESS_TOKEN;
+
+    if (!phoneNumberId || !accessToken) {
+      return res.status(503).json({
+        success: false,
+        message: "WhatsApp Cloud API credentials not configured in backend",
+      });
+    }
+
+    const cleanTo = String(to).replace(/[^0-9]/g, "");
+    const waPayload = {
+      messaging_product: "whatsapp",
+      action: "connect",
+      session: {
+        sdp_type: "offer",
+        sdp: offerSdp,
+      },
+    };
+
+    if (cleanTo.length >= 7) {
+      waPayload.to = cleanTo;
+    } else {
+      waPayload.recipient = String(to).trim();
+    }
+
+    const response = await axios.post(
+      `https://graph.facebook.com/v22.0/${phoneNumberId}/calls`,
+      waPayload,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    const callId = response.data?.calls?.[0]?.id;
+
+    return res.status(200).json({
+      success: true,
+      message: "WhatsApp call initiated",
+      callId,
+      data: response.data,
+    });
+  } catch (error) {
+    const fbError = error.response?.data?.error;
+    console.error("Meta WhatsApp Calling initiation failed:", fbError || error.message);
+
+    return res.status(error.response?.status || 500).json({
+      success: false,
+      message: fbError?.message || "Failed to initiate WhatsApp call",
+      code: fbError?.code,
+      subcode: fbError?.error_subcode,
+      details: fbError?.error_data?.details || fbError?.error_user_msg || error.message,
+    });
+  }
+};
+
+/**
+ * 6. Accept Inbound WhatsApp Call (Meta Cloud API Calling)
+ */
+export const acceptWhatsAppCall = async (req, res) => {
+  try {
+    const { callId } = req.params;
+    const { answerSdp } = req.body;
+
+    if (!callId || !answerSdp) {
+      return res.status(400).json({
+        success: false,
+        message: "callId and answerSdp are required",
+      });
+    }
+
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+    const accessToken = process.env.WHATSAPP_ACCESS_TOKEN || process.env.FB_ACCESS_TOKEN;
+
+    const response = await axios.post(
+      `https://graph.facebook.com/v22.0/${phoneNumberId}/calls`,
+      {
+        messaging_product: "whatsapp",
+        call_id: callId,
+        action: "accept",
+        session: {
+          sdp_type: "answer",
+          sdp: answerSdp,
+        },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "WhatsApp call accepted successfully",
+      data: response.data,
+    });
+  } catch (error) {
+    const fbError = error.response?.data?.error;
+    console.error("Meta WhatsApp Accept Call failed:", fbError || error.message);
+    return res.status(error.response?.status || 500).json({
+      success: false,
+      message: fbError?.message || "Failed to accept call",
+      details: fbError?.error_data?.details || error.message,
+    });
+  }
+};
+
+/**
+ * 7. Reject Inbound WhatsApp Call (Meta Cloud API Calling)
+ */
+export const rejectWhatsAppCall = async (req, res) => {
+  try {
+    const { callId } = req.params;
+
+    if (!callId) {
+      return res.status(400).json({ success: false, message: "callId is required" });
+    }
+
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+    const accessToken = process.env.WHATSAPP_ACCESS_TOKEN || process.env.FB_ACCESS_TOKEN;
+
+    const response = await axios.post(
+      `https://graph.facebook.com/v22.0/${phoneNumberId}/calls`,
+      {
+        messaging_product: "whatsapp",
+        call_id: callId,
+        action: "reject",
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "WhatsApp call rejected",
+      data: response.data,
+    });
+  } catch (error) {
+    const fbError = error.response?.data?.error;
+    console.error("Meta WhatsApp Reject Call failed:", fbError || error.message);
+    return res.status(error.response?.status || 500).json({
+      success: false,
+      message: fbError?.message || "Failed to reject call",
+      details: fbError?.error_data?.details || error.message,
+    });
+  }
+};
+
+/**
+ * 8. Terminate Active WhatsApp Call (Meta Cloud API Calling)
+ */
+export const terminateWhatsAppCall = async (req, res) => {
+  try {
+    const { callId } = req.params;
+
+    if (!callId) {
+      return res.status(400).json({ success: false, message: "callId is required" });
+    }
+
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+    const accessToken = process.env.WHATSAPP_ACCESS_TOKEN || process.env.FB_ACCESS_TOKEN;
+
+    const response = await axios.post(
+      `https://graph.facebook.com/v22.0/${phoneNumberId}/calls`,
+      {
+        messaging_product: "whatsapp",
+        call_id: callId,
+        action: "terminate",
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "WhatsApp call terminated",
+      data: response.data,
+    });
+  } catch (error) {
+    const fbError = error.response?.data?.error;
+    console.error("Meta WhatsApp Terminate Call failed:", fbError || error.message);
+    return res.status(error.response?.status || 500).json({
+      success: false,
+      message: fbError?.message || "Failed to terminate call",
+      details: fbError?.error_data?.details || error.message,
+    });
+  }
+};
+
+/**
+ * 9. Get WhatsApp Calling Settings & Status from Meta
+ */
+export const getWhatsAppCallingSettings = async (req, res) => {
+  try {
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+    const accessToken = process.env.WHATSAPP_ACCESS_TOKEN || process.env.FB_ACCESS_TOKEN;
+
+    if (!phoneNumberId || !accessToken) {
+      return res.status(503).json({
+        success: false,
+        message: "WhatsApp credentials not configured",
+      });
+    }
+
+    const [settingsRes, phoneRes] = await Promise.allSettled([
+      axios.get(`https://graph.facebook.com/v22.0/${phoneNumberId}/settings`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }),
+      axios.get(
+        `https://graph.facebook.com/v22.0/${phoneNumberId}?fields=id,display_phone_number,messaging_limit_tier,quality_rating`,
+        {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }
+      ),
+    ]);
+
+    const settingsData = settingsRes.status === "fulfilled" ? settingsRes.value.data : null;
+    const phoneData = phoneRes.status === "fulfilled" ? phoneRes.value.data : null;
+
+    return res.status(200).json({
+      success: true,
+      calling: settingsData?.calling || null,
+      phone: phoneData || null,
+      isCallingReady: settingsData?.calling?.status === "ENABLED",
+    });
+  } catch (error) {
+    console.error("Error fetching WhatsApp calling settings:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch WhatsApp calling settings",
+    });
   }
 };

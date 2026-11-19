@@ -109,10 +109,33 @@ export const getDashboardStats = async (req, res) => {
     const { startDate, endDate } = req.query;
     const stats = await getLatestDashboardStats(startDate, endDate);
 
+    // Verify if caller is admin
+    let isAdmin = false;
+    const token = req.headers.authorization?.split(" ")[1];
+    if (token) {
+      try {
+        const decodedToken = await admin.auth().verifyIdToken(token);
+        const user = await userCollection.findOne({ email: decodedToken.email });
+        if (user?.role === "admin") {
+          isAdmin = true;
+        }
+      } catch (err) {
+        // silent catch
+      }
+    }
+
+    // Clone stats object to avoid mutating internal cached references
+    const responseData = { ...stats };
+    if (!isAdmin) {
+      delete responseData.income;
+      delete responseData.expenses;
+      delete responseData.profit;
+    }
+
     return res.status(200).json({
       success: true,
       message: "Dashboard metrics fetched successfully",
-      data: stats,
+      data: responseData,
     });
   } catch (error) {
     console.error("Get Dashboard Stats Error:", error);
@@ -137,6 +160,28 @@ export const getDashboardStats = async (req, res) => {
  */
 export const getPeriodBreakdown = async (req, res) => {
   try {
+    // Only admins are allowed to inspect financial period breakdowns
+    let isAdmin = false;
+    const token = req.headers.authorization?.split(" ")[1];
+    if (token) {
+      try {
+        const decodedToken = await admin.auth().verifyIdToken(token);
+        const user = await userCollection.findOne({ email: decodedToken.email });
+        if (user?.role === "admin") {
+          isAdmin = true;
+        }
+      } catch (err) {
+        // silent catch
+      }
+    }
+
+    if (!isAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: "Financial breakdown is accessible to administrators only",
+      });
+    }
+
     const { startDate, endDate, tab, page, limit, search } = req.query;
     const result = await getPaginatedPeriodBreakdown({
       startDate,

@@ -1,7 +1,9 @@
 import client from "../config/db.js";
+import admin from "../admin/firebase.config.js";
 
 const orderCollection = client.db("nexoro").collection("Orders");
 const expenseCollection = client.db("nexoro").collection("expenses");
+const userCollection = client.db("nexoro").collection("Users");
 
 /**
  * Controller: Get aggregated revenue, expense, and order chart analytics
@@ -514,7 +516,7 @@ export const revenueChart = async (req, res) => {
       };
     });
 
-    const summary = {
+    let summary = {
       totalOrders: finalData.reduce((acc, curr) => acc + curr.orders, 0),
       totalEarnings: finalData.reduce((acc, curr) => acc + curr.earnings, 0),
       totalDues: finalData.reduce((acc, curr) => acc + curr.dues, 0),
@@ -525,13 +527,40 @@ export const revenueChart = async (req, res) => {
       ),
     };
 
+    // If requester is not admin, sanitize all revenue & expense details
+    let isAdmin = false;
+    const token = req.headers.authorization?.split(" ")[1];
+    if (token) {
+      try {
+        const decodedToken = await admin.auth().verifyIdToken(token);
+        const user = await userCollection.findOne({ email: decodedToken.email });
+        if (user?.role === "admin") {
+          isAdmin = true;
+        }
+      } catch (err) {
+        // silent catch
+      }
+    }
+
+    let sanitizedData = finalData;
+    if (!isAdmin) {
+      sanitizedData = finalData.map((bucket) => ({
+        key: bucket.key,
+        name: bucket.name,
+        orders: bucket.orders,
+      }));
+      summary = {
+        totalOrders: summary.totalOrders,
+      };
+    }
+
     return res.status(200).json({
       success: true,
       range: qStart ? "custom" : range,
       startDate: startDate.toISOString(),
       endDate: endDate.toISOString(),
       summary,
-      data: finalData,
+      data: sanitizedData,
     });
   } catch (error) {
     console.error("Revenue chart error:", error);

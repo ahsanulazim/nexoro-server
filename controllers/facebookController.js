@@ -184,6 +184,31 @@ export const handleFBWebhook = async (req, res) => {
           let text = message.text || "";
           let attachments = [];
 
+          const rawReferral =
+            message.referral ||
+            webhookEvent.referral ||
+            webhookEvent.postback?.referral ||
+            null;
+
+          let referral = null;
+          if (rawReferral) {
+            referral = {
+              source_type: "ad",
+              source_id: rawReferral.ad_id || rawReferral.source_id || null,
+              headline: rawReferral.ad_title || rawReferral.headline || rawReferral.ads_context_data?.ad_title || null,
+              body: rawReferral.body || null,
+              source_url: rawReferral.source_url || null,
+              image_url: rawReferral.ads_context_data?.photo_url || rawReferral.image_url || null,
+              video_url: rawReferral.ads_context_data?.video_url || rawReferral.video_url || null,
+            };
+
+            const adTitle = referral.headline || referral.body || "";
+            const adTag = adTitle ? `\n\n📢 [Source: Meta Ad - "${adTitle}"]` : "\n\n📢 [Source: Meta Ad]";
+            if (!text.includes("[Source: Meta Ad")) {
+              text = `${text}${adTag}`;
+            }
+          }
+
           if (message.attachments && message.attachments.length > 0) {
             attachments = message.attachments.map((att) => ({
               type: att.type === "image" ? "image" : (att.payload?.mime_type || att.type),
@@ -211,6 +236,7 @@ export const handleFBWebhook = async (req, res) => {
             createdAt: new Date(timestamp),
             senderName: customerName,
             senderAvatar: customerAvatar,
+            ...(referral ? { referral } : {}),
           };
 
           // 1. Upsert message into DB by metaMessageId to avoid duplicate
@@ -242,6 +268,7 @@ export const handleFBWebhook = async (req, res) => {
                 lastMessage: text,
                 updatedAt: new Date(timestamp),
                 customer: customerObj,
+                ...(referral ? { referral } : {}),
               },
               $setOnInsert: {
                 createdAt: new Date(timestamp),
@@ -264,6 +291,8 @@ export const handleFBWebhook = async (req, res) => {
             customerId: senderId,
             platform,
             customer: customerObj,
+            unreadCount: typeof updatedConv?.unreadCount === "number" ? updatedConv.unreadCount : 1,
+            referral: updatedConv?.referral || referral || null,
           });
 
           const unreadCount =

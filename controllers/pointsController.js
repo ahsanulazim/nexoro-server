@@ -1,5 +1,6 @@
 import { ObjectId } from "mongodb";
 import client from "../config/db.js";
+import admin from "../admin/firebase.config.js";
 import { io } from "../socket/socket.js";
 import { createAndSendNotification } from "../utils/notificationHelper.js";
 
@@ -100,7 +101,14 @@ export const resolveStaffUser = async (identifier, fallbackEmail = null) => {
       userDoc?.email ||
       "Team Member",
     userRole: userDoc?.role || teamDoc?.role || "member",
-    profilePic: userDoc?.photoURL || teamDoc?.profilePic || null,
+    profilePic:
+      userDoc?.photoURL ||
+      userDoc?.avatar ||
+      userDoc?.profilePic ||
+      userDoc?.image ||
+      teamDoc?.profilePic ||
+      teamDoc?.avatar ||
+      null,
   };
 };
 
@@ -651,11 +659,24 @@ export const getLeaderboard = async (req, res) => {
       }
     }
 
-    // 1. Get ONLY registered users with role: "member" (plus Team docs only for profile picture/job title enrichment)
+    // 1. Get ONLY registered users with role: "member" (plus Team docs for profile picture/job title enrichment)
     const [memberUsers, teamDocs] = await Promise.all([
       userCollection
         .find({ role: "member" })
-        .project({ _id: 1, name: 1, displayName: 1, email: 1, role: 1, photoURL: 1 })
+        .project({
+          _id: 1,
+          name: 1,
+          displayName: 1,
+          email: 1,
+          role: 1,
+          uid: 1,
+          photoURL: 1,
+          avatar: 1,
+          profilePic: 1,
+          image: 1,
+          photo: 1,
+          picture: 1,
+        })
         .toArray(),
       teamCollection.find({}).toArray(),
     ]);
@@ -664,6 +685,50 @@ export const getLeaderboard = async (req, res) => {
     teamDocs.forEach((t) => {
       if (t.email) teamByEmail.set(t.email.toLowerCase().trim(), t);
     });
+
+    // Resolve Firebase Auth photos for members who don't have DB/Team avatar
+    const firebasePicMap = new Map();
+    const usersNeedingPic = memberUsers.filter((u) => {
+      const email = (u.email || "").toLowerCase().trim();
+      const hasDbPic =
+        u.photoURL ||
+        u.avatar ||
+        u.profilePic ||
+        u.image ||
+        u.photo ||
+        u.picture ||
+        teamByEmail.get(email)?.profilePic ||
+        teamByEmail.get(email)?.avatar;
+      return !hasDbPic && (u.uid || u.email);
+    });
+
+    if (usersNeedingPic.length > 0) {
+      try {
+        const identifiers = usersNeedingPic
+          .map((u) =>
+            u.uid
+              ? { uid: String(u.uid) }
+              : { email: String(u.email).toLowerCase().trim() },
+          )
+          .slice(0, 100);
+        const fbResult = await admin.auth().getUsers(identifiers);
+        fbResult.users.forEach((fbUser) => {
+          if (fbUser.photoURL) {
+            if (fbUser.email) {
+              firebasePicMap.set(
+                fbUser.email.toLowerCase().trim(),
+                fbUser.photoURL,
+              );
+            }
+            if (fbUser.uid) {
+              firebasePicMap.set(fbUser.uid, fbUser.photoURL);
+            }
+          }
+        });
+      } catch (fbErr) {
+        console.warn("Firebase photo lookup notice:", fbErr?.message);
+      }
+    }
 
     // 2. Aggregate active points logs for the requested period
     const matchStage = { status: "active" };
@@ -748,6 +813,19 @@ export const getLeaderboard = async (req, res) => {
       const teamInfo = teamByEmail.get(emailKey);
       const stats = aggByEmail.get(emailKey) || aggById.get(idStr);
 
+      const resolvedAvatar =
+        u.photoURL ||
+        u.avatar ||
+        u.profilePic ||
+        u.image ||
+        u.photo ||
+        u.picture ||
+        teamInfo?.profilePic ||
+        teamInfo?.avatar ||
+        firebasePicMap.get(emailKey) ||
+        (u.uid ? firebasePicMap.get(u.uid) : null) ||
+        null;
+
       leaderboardMap.set(emailKey || idStr, {
         userId: idStr,
         userEmail: emailKey,
@@ -755,7 +833,7 @@ export const getLeaderboard = async (req, res) => {
           u.name || u.displayName || teamInfo?.memberName || u.email || "Member",
         role: teamInfo?.role || "Team Member",
         systemRole: "member",
-        profilePic: teamInfo?.profilePic || u.photoURL || null,
+        profilePic: resolvedAvatar,
         totalPoints: stats?.totalPoints || 0,
         projectPoints: stats?.projectPoints || 0,
         extraWorkPoints: stats?.extraWorkPoints || 0,

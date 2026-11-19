@@ -1375,11 +1375,21 @@ export const getCustomerCRMDetails = async (req, res) => {
       },
     };
 
+    // 4b. Detect Meta Ad Referral info if available
+    let referral = conversation.referral || null;
+    if (!referral) {
+      const msgWithReferral = recentMsgs.find((m) => m.referral);
+      if (msgWithReferral?.referral) {
+        referral = msgWithReferral.referral;
+      }
+    }
+
     return res.status(200).json({
       success: true,
       data: {
         customer: customerData,
         isClient: Boolean(existingClient),
+        referral: referral || null,
         clientId: matchedClientId,
         existingClient: existingClient
           ? {
@@ -2076,9 +2086,19 @@ export const getCannedResponses = async (req, res) => {
     const cannedCollection = client.db("nexoro").collection("CannedResponses");
     const customResponses = await cannedCollection.find({}).toArray();
 
+    const deletedIds = new Set(
+      customResponses.filter((r) => r.isDeleted).map((r) => String(r._id))
+    );
+    const activeCustom = customResponses.filter((r) => !r.isDeleted);
+    const customIds = new Set(activeCustom.map((r) => String(r._id)));
+
+    const remainingDefaults = defaultCannedResponses.filter(
+      (d) => !deletedIds.has(String(d._id)) && !customIds.has(String(d._id))
+    );
+
     return res.status(200).json({
       success: true,
-      data: [...defaultCannedResponses, ...customResponses],
+      data: [...remainingDefaults, ...activeCustom],
     });
   } catch (error) {
     console.error("Error fetching canned responses:", error);
@@ -2088,7 +2108,7 @@ export const getCannedResponses = async (req, res) => {
 
 export const createCannedResponse = async (req, res) => {
   try {
-    const { shortcut, title, text, category = "Custom" } = req.body;
+    const { shortcut, title, text, category = "General" } = req.body;
     if (!shortcut || !text) {
       return res
         .status(400)
@@ -2112,6 +2132,83 @@ export const createCannedResponse = async (req, res) => {
     });
   } catch (error) {
     console.error("Error creating canned response:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Internal server error" });
+  }
+};
+
+export const updateCannedResponse = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { shortcut, title, text, category } = req.body;
+
+    if (!shortcut || !text) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Shortcut and text are required" });
+    }
+
+    const cannedCollection = client.db("nexoro").collection("CannedResponses");
+    const formattedShortcut = shortcut.startsWith("/") ? shortcut : `/${shortcut}`;
+
+    const updateDoc = {
+      shortcut: formattedShortcut,
+      title: title || formattedShortcut,
+      text,
+      category: category || "General",
+      updatedAt: new Date(),
+    };
+
+    if (ObjectId.isValid(id) && id.length === 24) {
+      await cannedCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: updateDoc }
+      );
+    } else {
+      // For string IDs (e.g. def_1, def_2, etc.), upsert so custom override persists
+      await cannedCollection.updateOne(
+        { _id: id },
+        { $set: { ...updateDoc, _id: id, isDeleted: false } },
+        { upsert: true }
+      );
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Canned response updated successfully",
+      data: { _id: id, ...updateDoc },
+    });
+  } catch (error) {
+    console.error("Error updating canned response:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Internal server error" });
+  }
+};
+
+export const deleteCannedResponse = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const cannedCollection = client.db("nexoro").collection("CannedResponses");
+
+    if (ObjectId.isValid(id) && id.length === 24) {
+      await cannedCollection.deleteOne({ _id: new ObjectId(id) });
+    } else {
+      // If it's a default response or string ID, mark it as isDeleted: true
+      await cannedCollection.updateOne(
+        { _id: id },
+        { $set: { _id: id, isDeleted: true, deletedAt: new Date() } },
+        { upsert: true }
+      );
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Canned response deleted successfully",
+    });
+  } catch (error) {
+    console.error("Error deleting canned response:", error);
     return res
       .status(500)
       .json({ success: false, message: "Internal server error" });

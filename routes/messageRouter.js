@@ -13,6 +13,8 @@ import {
   updateCRMProfile,
   getCannedResponses,
   createCannedResponse,
+  updateCannedResponse,
+  deleteCannedResponse,
 } from "../controllers/messageController.js";
 import { verifyId } from "../middleware/verifyId.js";
 import { verifyAdmin } from "../middleware/verifyAdmin.js";
@@ -74,5 +76,7 @@ messageRouter.post(
 // Canned Responses Routes
 messageRouter.get("/cannedResponses", verifyId, getCannedResponses);
 messageRouter.post("/cannedResponses", verifyId, createCannedResponse);
+messageRouter.put("/cannedResponses/:id", verifyId, updateCannedResponse);
+messageRouter.delete("/cannedResponses/:id", verifyId, deleteCannedResponse);
 
 export default messageRouter;
