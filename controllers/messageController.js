@@ -29,7 +29,7 @@ const EMAIL_EXTRACT_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/gi;
 const BD_PHONE_REGEX = /(?:\+?880|0)1[3-9]\d{8}\b/g;
 const INTL_PHONE_REGEX = /(?:\+\d{1,3}[\s.-]?)?\(?\d{2,4}\)?[\s.-]?\d{3,4}[\s.-]?\d{3,4}/g;
 
-const isPlaceholderClientEmail = (email) =>
+export const isPlaceholderClientEmail = (email) =>
   !email || String(email).toLowerCase().endsWith("@client.nexoro.local");
 
 /**
@@ -94,7 +94,7 @@ const extractContactInfoFromMessages = (messages = [], roomId = "", platform = "
 /**
  * Helper: Find matching Client in Clients collection by clientId, email, phone, or roomId
  */
-const findMatchingClient = async ({ clientId, email, phone, roomId, platformId, bsuid }) => {
+export const findMatchingClient = async ({ clientId, email, phone, roomId, platformId, bsuid }) => {
   const orConditions = [];
 
   if (clientId && ObjectId.isValid(String(clientId))) {

@@ -17,6 +17,7 @@ async function ensureInboxIndexes(db) {
   try {
     const msgCollection = db.collection("Messages");
     const convCollection = db.collection("Conversations");
+    const dealCollection = db.collection("Deals");
 
     await Promise.all([
       msgCollection.createIndex({ roomId: 1, createdAt: -1 }),
@@ -29,6 +30,9 @@ async function ensureInboxIndexes(db) {
       convCollection.createIndex({ customerId: 1 }, { sparse: true }),
       convCollection.createIndex({ "customer.bsuid": 1 }, { sparse: true }),
       convCollection.createIndex({ "customer.phone": 1 }, { sparse: true }),
+      dealCollection.createIndex({ dealId: 1 }, { unique: true }),
+      dealCollection.createIndex({ roomId: 1 }),
+      dealCollection.createIndex({ status: 1 }),
     ]);
   } catch (idxErr) {
     console.warn("Index initialization warning:", idxErr.message);

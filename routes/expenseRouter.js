@@ -2,12 +2,16 @@ import { Router } from "express";
 import {
   getAllExpenses,
   addExpense,
+  getExpense,
+  updateExpense,
+  deleteExpense,
 } from "../controllers/expenseController.js";
-import { getExpense } from "../controllers/expenseController.js";
-import { updateExpense } from "../controllers/expenseController.js";
-import { deleteExpense } from "../controllers/expenseController.js";
+import { verifyPermission } from "../middleware/verifyPermission.js";
 
 const expenseRouter = Router();
+
+// All expense routes require 'expenses' permission (Admin or Member with 'expenses' permission)
+expenseRouter.use(verifyPermission("expenses"));
 
 expenseRouter.post("/add-expense", addExpense);
 expenseRouter.get("/get-expenses", getAllExpenses);

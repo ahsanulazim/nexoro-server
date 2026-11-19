@@ -6,8 +6,10 @@ import {
   getAllMembers,
   getAllUsers,
   getAssignableUsers,
+  getPermissionConfig,
   getUser,
   promoteUser,
+  updateMemberPermissions,
   updateUser,
 } from "../controllers/userController.js";
 import { verifyId } from "../middleware/verifyId.js";
@@ -21,9 +23,11 @@ router.get("/getUser", verifyId, getUser);
 router.get("/", verifyId, verifyAdmin, getAllUsers);
 router.get("/team/members", getAllMembers);
 router.get("/assignable", verifyId, getAssignableUsers);
+router.get("/permissions/config", verifyId, getPermissionConfig);
+router.put("/permissions", verifyId, verifyAdmin, updateMemberPermissions);
 router.put("/updateUser", verifyId, updateUser);
-router.put("/promote", promoteUser);
-router.put("/demote", demoteMember);
+router.put("/promote", verifyId, verifyAdmin, promoteUser);
+router.put("/demote", verifyId, verifyAdmin, demoteMember);
 router.delete("/delete", verifyId, verifyAdmin, deleteUser);
 
 export default router;
