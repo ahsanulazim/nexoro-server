@@ -251,7 +251,9 @@ export const getAllOrders = async (req, res) => {
     const skip = (page - 1) * limit;
     const { status, search } = req.query;
 
-    const query = {};
+    const query = {
+      isStandaloneProject: { $ne: true },
+    };
 
     // Status filter
     if (status && status.toLowerCase() !== "all") {
@@ -316,11 +318,14 @@ export const getAllOrders = async (req, res) => {
 
     // Total orders matching query
     const totalOrders = await orderCollection.countDocuments(query);
-    const totalAllOrders = await orderCollection.countDocuments();
+    const totalAllOrders = await orderCollection.countDocuments({
+      isStandaloneProject: { $ne: true },
+    });
 
     // Group counts for status tabs
     const statusGroups = await orderCollection
       .aggregate([
+        { $match: { isStandaloneProject: { $ne: true } } },
         {
           $group: {
             _id: { $toLower: { $ifNull: ["$status", "pending"] } },
@@ -429,7 +434,11 @@ export const getAllOrders = async (req, res) => {
           amount: order.amount,
           dueAmount: dueAmount > 0 ? dueAmount : 0,
           assignedTo: order.assignedTo,
-          assignedMember: member?.memberName || null,
+          assignedMember:
+            order.assignedMembers?.length > 0
+              ? order.assignedMembers.map((m) => m.memberName).join(", ")
+              : member?.memberName || null,
+          assignedMembers: order.assignedMembers || [],
           rewardPoints: order.rewardPoints ?? 5,
           tasks: order.tasks || [],
           costs: order.costs || [],
@@ -790,11 +799,10 @@ export const updateOrderStatus = async (req, res) => {
   }
 };
 
-//assign order to a member
+//assign order to member(s)
 export const assignOrderToMember = async (req, res) => {
   const id = req.query.id || req.body.id || req.body.orderId;
-  const { assignedTo, tasks, rewardPoints } = req.body;
-  console.log(id, assignedTo, tasks, rewardPoints);
+  const { assignedTo, assignedMembers, tasks, rewardPoints, rateType, rateValue } = req.body;
 
   try {
     if (!id) {
@@ -863,7 +871,10 @@ export const assignOrderToMember = async (req, res) => {
         const isSelfAssign =
           String(assignedTo) === callerIdStr ||
           String(assignedTo).toLowerCase() === callerEmail ||
-          String(assignedTo).toLowerCase() === callerName;
+          String(assignedTo).toLowerCase() === callerName ||
+          (Array.isArray(assignedMembers) &&
+            assignedMembers.length === 1 &&
+            String(assignedMembers[0].memberId) === callerIdStr);
 
         if (!isSelfAssign) {
           return res.status(403).json({
@@ -883,10 +894,111 @@ export const assignOrderToMember = async (req, res) => {
           }))
       : [];
 
-    const updateDoc = {};
-    if (assignedTo !== undefined) {
-      updateDoc.assignedTo = assignedTo;
+    const orderPrice = Number(order.price) || Number(order.servicePrice) || 0;
+
+    // Format assigned members with payout rate (percentage or flat)
+    let formattedAssignedMembers = [];
+    if (Array.isArray(assignedMembers) && assignedMembers.length > 0) {
+      for (const m of assignedMembers) {
+        const memberIdStr = String(m.memberId || m._id || "").trim();
+        if (!memberIdStr) continue;
+
+        let memberName = m.memberName || "";
+        let memberEmail = m.memberEmail || "";
+        let memberRole = m.role || "member";
+
+        if (ObjectId.isValid(memberIdStr)) {
+          const userDoc = await userCollection.findOne({ _id: new ObjectId(memberIdStr) });
+          if (userDoc) {
+            memberName = userDoc.name || userDoc.displayName || userDoc.email;
+            memberEmail = userDoc.email || "";
+            memberRole = userDoc.role || "member";
+          } else {
+            const teamDoc = await teamCollection.findOne({ _id: new ObjectId(memberIdStr) });
+            if (teamDoc) {
+              memberName = teamDoc.memberName || teamDoc.email;
+              memberEmail = teamDoc.email || "";
+              memberRole = teamDoc.role || "member";
+            }
+          }
+        }
+
+        const mRateType = m.rateType === "flat" ? "flat" : "percentage";
+        const mRateValue = Math.max(0, Number(m.rateValue) || 0);
+        const mAmount =
+          mRateType === "percentage"
+            ? Math.round(orderPrice * (mRateValue / 100))
+            : mRateValue;
+
+        formattedAssignedMembers.push({
+          memberId: memberIdStr,
+          memberName: memberName || "Member",
+          memberEmail: memberEmail || "",
+          role: memberRole,
+          rateType: mRateType,
+          rateValue: mRateValue,
+          amount: mAmount,
+          assignedAt: m.assignedAt ? new Date(m.assignedAt) : new Date(),
+        });
+      }
+    } else if (assignedTo) {
+      const memberIdStr = String(assignedTo).trim();
+      let memberName = "";
+      let memberEmail = "";
+      let memberRole = "member";
+
+      if (ObjectId.isValid(memberIdStr)) {
+        const userDoc = await userCollection.findOne({ _id: new ObjectId(memberIdStr) });
+        if (userDoc) {
+          memberName = userDoc.name || userDoc.displayName || userDoc.email;
+          memberEmail = userDoc.email || "";
+          memberRole = userDoc.role || "member";
+        } else {
+          const teamDoc = await teamCollection.findOne({ _id: new ObjectId(memberIdStr) });
+          if (teamDoc) {
+            memberName = teamDoc.memberName || teamDoc.email;
+            memberEmail = teamDoc.email || "";
+            memberRole = teamDoc.role || "member";
+          }
+        }
+      }
+
+      const mRateType = rateType === "flat" ? "flat" : "percentage";
+      const mRateValue = Math.max(0, Number(rateValue) || 0);
+      const mAmount =
+        mRateType === "percentage"
+          ? Math.round(orderPrice * (mRateValue / 100))
+          : mRateValue;
+
+      formattedAssignedMembers.push({
+        memberId: memberIdStr,
+        memberName: memberName || "Member",
+        memberEmail: memberEmail || "",
+        role: memberRole,
+        rateType: mRateType,
+        rateValue: mRateValue,
+        amount: mAmount,
+        assignedAt: new Date(),
+      });
     }
+
+    const updateDoc = {};
+    if (formattedAssignedMembers.length > 0) {
+      updateDoc.assignedMembers = formattedAssignedMembers;
+      updateDoc.assignedTo = formattedAssignedMembers[0].memberId;
+      updateDoc.assignedMember = formattedAssignedMembers
+        .map((m) => m.memberName)
+        .join(", ");
+      updateDoc.assignedMemberEmail = formattedAssignedMembers[0].memberEmail;
+    } else if (assignedTo !== undefined) {
+      updateDoc.assignedTo = assignedTo;
+      if (assignedTo === null || assignedTo === "") {
+        updateDoc.assignedMembers = [];
+        updateDoc.assignedMember = null;
+        updateDoc.assignedMemberEmail = null;
+      }
+    }
+
     if (tasks !== undefined) {
       updateDoc.tasks = formattedTasks;
     }
@@ -903,7 +1015,13 @@ export const assignOrderToMember = async (req, res) => {
           ? order.tasks
           : [];
     const currentAssignedTo =
-      assignedTo !== undefined ? assignedTo : order.assignedTo;
+      updateDoc.assignedTo !== undefined ? updateDoc.assignedTo : order.assignedTo;
+    const currentAssignedMembers =
+      updateDoc.assignedMembers !== undefined
+        ? updateDoc.assignedMembers
+        : Array.isArray(order.assignedMembers)
+          ? order.assignedMembers
+          : [];
 
     // Dynamic status determination:
     let dynamicStatus = "Pending";
@@ -912,7 +1030,11 @@ export const assignOrderToMember = async (req, res) => {
       currentTasks.every((t) => t.isCompleted === true)
     ) {
       dynamicStatus = "Completed";
-    } else if (currentAssignedTo || currentTasks.length > 0) {
+    } else if (
+      currentAssignedTo ||
+      currentAssignedMembers.length > 0 ||
+      currentTasks.length > 0
+    ) {
       dynamicStatus = "Processing";
     } else {
       dynamicStatus = "Pending";
@@ -924,16 +1046,29 @@ export const assignOrderToMember = async (req, res) => {
       { $set: updateDoc },
     );
 
-    // Send project assignment notification to the assigned member
-    if (assignedTo) {
-      let serviceTitle = order?.service || "Project";
-      if (order?.service && order.service !== "custom") {
-        const service = await serviceCollection.findOne({ slug: order.service });
-        if (service?.title) serviceTitle = service.title;
-      } else if (order?.serviceName) {
-        serviceTitle = order.serviceName;
-      }
+    // Send project assignment notifications to all assigned members
+    let serviceTitle = order?.service || "Project";
+    if (order?.service && order.service !== "custom") {
+      const service = await serviceCollection.findOne({ slug: order.service });
+      if (service?.title) serviceTitle = service.title;
+    } else if (order?.serviceName) {
+      serviceTitle = order.serviceName;
+    }
 
+    if (formattedAssignedMembers.length > 0) {
+      for (const m of formattedAssignedMembers) {
+        const rateDesc = m.rateValue
+          ? ` (${m.rateType === "percentage" ? `${m.rateValue}%` : `৳${m.rateValue}`} earning)`
+          : "";
+        await createAndSendNotification({
+          type: "project_assigned",
+          title: "New Project Assigned",
+          message: `You have been assigned to order #${order?.orderId || id} (${serviceTitle})${rateDesc}.`,
+          link: "/dashboard/projects",
+          recipientId: m.memberId,
+        });
+      }
+    } else if (assignedTo) {
       await createAndSendNotification({
         type: "project_assigned",
         title: "New Project Assigned",
@@ -960,14 +1095,17 @@ export const assignOrderToMember = async (req, res) => {
       });
     }
 
-    // Real-time broadcast for dashboard stats (assigned vs pending projects updated)
+    // Real-time broadcast for dashboard stats
     broadcastDashboardStats().catch((err) =>
-      console.error("Dashboard stats broadcast error:", err)
+      console.error("Dashboard stats broadcast error:", err),
     );
 
-    res
-      .status(200)
-      .json({ success: true, message: "Order assigned to member with tasks", status: dynamicStatus });
+    res.status(200).json({
+      success: true,
+      message: "Order assigned to member(s) with tasks",
+      status: dynamicStatus,
+      assignedMembers: updateDoc.assignedMembers || [],
+    });
   } catch (error) {
     console.error("Assign order to member error:", error);
     res
@@ -979,7 +1117,7 @@ export const assignOrderToMember = async (req, res) => {
 // Update tasks for an order (add, edit, toggle complete, delete tasks)
 export const updateOrderTasks = async (req, res) => {
   const id = req.query.id || req.body.orderId || req.params.orderId;
-  const { tasks, assignedTo, rewardPoints } = req.body;
+  const { tasks, assignedTo, assignedMembers, rewardPoints } = req.body;
 
   if (!id) {
     return res.status(400).json({
@@ -1036,7 +1174,16 @@ export const updateOrderTasks = async (req, res) => {
               (caller.name || "").toLowerCase())) ||
         (order.assignedMemberEmail &&
           order.assignedMemberEmail.toLowerCase() ===
-            caller.email.toLowerCase());
+            caller.email.toLowerCase()) ||
+        (Array.isArray(order.assignedMembers) &&
+          order.assignedMembers.some(
+            (m) =>
+              (m.memberId && String(m.memberId) === callerIdStr) ||
+              (m.memberEmail &&
+                m.memberEmail.toLowerCase() === (caller.email || "").toLowerCase()) ||
+              (m.memberName &&
+                (caller.name || "").toLowerCase() === (m.memberName || "").toLowerCase()),
+          ));
 
       if (!isAssignedToCaller) {
         return res.status(403).json({
@@ -1047,8 +1194,9 @@ export const updateOrderTasks = async (req, res) => {
 
       // Member cannot reassign
       if (
-        assignedTo !== undefined &&
-        String(assignedTo) !== String(order.assignedTo)
+        (assignedTo !== undefined &&
+          String(assignedTo) !== String(order.assignedTo)) ||
+        assignedMembers !== undefined
       ) {
         return res.status(403).json({
           success: false,
@@ -1154,6 +1302,74 @@ export const updateOrderTasks = async (req, res) => {
     // Admin or unrestricted update
     const updateDoc = {};
 
+    const orderPrice = Number(order.price) || Number(order.servicePrice) || 0;
+
+    if (Array.isArray(assignedMembers)) {
+      const formattedMembers = [];
+      for (const m of assignedMembers) {
+        const memberIdStr = String(m.memberId || m._id || "").trim();
+        if (!memberIdStr) continue;
+
+        let memberName = m.memberName || "";
+        let memberEmail = m.memberEmail || "";
+        let memberRole = m.role || "member";
+
+        if (ObjectId.isValid(memberIdStr)) {
+          const userDoc = await userCollection.findOne({ _id: new ObjectId(memberIdStr) });
+          if (userDoc) {
+            memberName = userDoc.name || userDoc.displayName || userDoc.email;
+            memberEmail = userDoc.email || "";
+            memberRole = userDoc.role || "member";
+          } else {
+            const teamDoc = await teamCollection.findOne({ _id: new ObjectId(memberIdStr) });
+            if (teamDoc) {
+              memberName = teamDoc.memberName || teamDoc.email;
+              memberEmail = teamDoc.email || "";
+              memberRole = teamDoc.role || "member";
+            }
+          }
+        }
+
+        const mRateType = m.rateType === "flat" ? "flat" : "percentage";
+        const mRateValue = Math.max(0, Number(m.rateValue) || 0);
+        const mAmount =
+          mRateType === "percentage"
+            ? Math.round(orderPrice * (mRateValue / 100))
+            : mRateValue;
+
+        formattedMembers.push({
+          memberId: memberIdStr,
+          memberName: memberName || "Member",
+          memberEmail: memberEmail || "",
+          role: memberRole,
+          rateType: mRateType,
+          rateValue: mRateValue,
+          amount: mAmount,
+          assignedAt: m.assignedAt ? new Date(m.assignedAt) : new Date(),
+        });
+      }
+
+      updateDoc.assignedMembers = formattedMembers;
+      if (formattedMembers.length > 0) {
+        updateDoc.assignedTo = formattedMembers[0].memberId;
+        updateDoc.assignedMember = formattedMembers
+          .map((m) => m.memberName)
+          .join(", ");
+        updateDoc.assignedMemberEmail = formattedMembers[0].memberEmail;
+      } else {
+        updateDoc.assignedTo = null;
+        updateDoc.assignedMember = null;
+        updateDoc.assignedMemberEmail = null;
+      }
+    } else if (assignedTo !== undefined) {
+      updateDoc.assignedTo = assignedTo;
+      if (assignedTo === null || assignedTo === "") {
+        updateDoc.assignedMembers = [];
+        updateDoc.assignedMember = null;
+        updateDoc.assignedMemberEmail = null;
+      }
+    }
+
     if (tasks !== undefined) {
       const formattedTasks = Array.isArray(tasks)
         ? tasks
@@ -1164,10 +1380,6 @@ export const updateOrderTasks = async (req, res) => {
             }))
         : [];
       updateDoc.tasks = formattedTasks;
-    }
-
-    if (assignedTo !== undefined) {
-      updateDoc.assignedTo = assignedTo;
     }
 
     if (isAdmin && rewardPoints !== undefined && rewardPoints !== null) {
@@ -1182,6 +1394,12 @@ export const updateOrderTasks = async (req, res) => {
           : [];
     const currentAssignedTo =
       updateDoc.assignedTo !== undefined ? updateDoc.assignedTo : order.assignedTo;
+    const currentAssignedMembers =
+      updateDoc.assignedMembers !== undefined
+        ? updateDoc.assignedMembers
+        : Array.isArray(order.assignedMembers)
+          ? order.assignedMembers
+          : [];
 
     // Dynamic status determination:
     let dynamicStatus = "Pending";
@@ -1190,7 +1408,11 @@ export const updateOrderTasks = async (req, res) => {
       currentTasks.every((t) => t.isCompleted === true)
     ) {
       dynamicStatus = "Completed";
-    } else if (currentAssignedTo || currentTasks.length > 0) {
+    } else if (
+      currentAssignedTo ||
+      currentAssignedMembers.length > 0 ||
+      currentTasks.length > 0
+    ) {
       dynamicStatus = "Processing";
     } else {
       dynamicStatus = "Pending";

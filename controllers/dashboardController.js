@@ -109,14 +109,27 @@ export const getDashboardStats = async (req, res) => {
     const { startDate, endDate } = req.query;
     const stats = await getLatestDashboardStats(startDate, endDate);
 
-    // Verify if caller is admin
+    // Verify caller & role
     let isAdmin = false;
+    let callerUser = null;
+    let memberEarnings = {
+      totalEarnings: 0,
+      dueEarnings: 0,
+      assignedCount: 0,
+      pendingCount: 0,
+      completedCount: 0,
+    };
+
     const token = req.headers.authorization?.split(" ")[1];
     if (token) {
       try {
         const decodedToken = await admin.auth().verifyIdToken(token);
-        const user = await userCollection.findOne({ email: decodedToken.email });
-        if (user?.role === "admin") {
+        if (decodedToken?.email) {
+          callerUser = await userCollection.findOne({
+            email: { $regex: new RegExp(`^${decodedToken.email.trim()}$`, "i") },
+          });
+        }
+        if (callerUser?.role === "admin") {
           isAdmin = true;
         }
       } catch (err) {
@@ -124,8 +137,89 @@ export const getDashboardStats = async (req, res) => {
       }
     }
 
+    // Compute member earnings & stats if caller is authenticated
+    if (callerUser) {
+      const callerId = callerUser._id.toString();
+      const callerEmail = (callerUser.email || "").toLowerCase();
+      const callerName = (callerUser.name || callerUser.displayName || "").toLowerCase();
+
+      // Also check team collection for linked member ID
+      const teamMember = await teamCollection.findOne({
+        $or: [
+          { email: { $regex: new RegExp(`^${callerEmail}$`, "i") } },
+          ...(callerName ? [{ memberName: { $regex: new RegExp(`^${callerName}$`, "i") } }] : []),
+        ],
+      });
+      const teamMemberId = teamMember?._id?.toString() || "";
+
+      const memberOrders = await orderCollection
+        .find({
+          status: { $ne: "Cancelled" },
+          $or: [
+            { "assignedMembers.memberId": callerId },
+            { "assignedMembers.memberEmail": callerEmail },
+            { assignedTo: callerId },
+            { assignedTo: callerEmail },
+            { assignedMemberEmail: callerEmail },
+            ...(teamMemberId
+              ? [
+                  { "assignedMembers.memberId": teamMemberId },
+                  { assignedTo: teamMemberId },
+                ]
+              : []),
+          ],
+        })
+        .toArray();
+
+      for (const order of memberOrders) {
+        let orderMemberEarning = 0;
+        const orderPrice = Number(order.price) || Number(order.servicePrice) || 0;
+
+        if (Array.isArray(order.assignedMembers) && order.assignedMembers.length > 0) {
+          const match = order.assignedMembers.find(
+            (m) =>
+              (m.memberId && (String(m.memberId) === callerId || String(m.memberId) === teamMemberId)) ||
+              (m.memberEmail && m.memberEmail.toLowerCase() === callerEmail) ||
+              (m.memberName && callerName && m.memberName.toLowerCase() === callerName),
+          );
+          if (match) {
+            if (match.rateType === "percentage") {
+              orderMemberEarning = Math.round(orderPrice * ((Number(match.rateValue) || 0) / 100));
+            } else {
+              orderMemberEarning = Number(match.rateValue) || Number(match.amount) || 0;
+            }
+          }
+        } else {
+          // Legacy assignment fallback
+          if (order.rateType === "percentage") {
+            orderMemberEarning = Math.round(orderPrice * ((Number(order.rateValue) || 0) / 100));
+          } else if (order.rateType === "flat") {
+            orderMemberEarning = Number(order.rateValue) || 0;
+          }
+        }
+
+        const isCompleted =
+          order.status === "Completed" ||
+          (Array.isArray(order.tasks) &&
+            order.tasks.length > 0 &&
+            order.tasks.every((t) => t.isCompleted === true));
+
+        if (isCompleted) {
+          memberEarnings.totalEarnings += orderMemberEarning;
+          memberEarnings.completedCount++;
+        } else {
+          memberEarnings.dueEarnings += orderMemberEarning;
+          if (order.status === "Pending") {
+            memberEarnings.pendingCount++;
+          } else {
+            memberEarnings.assignedCount++;
+          }
+        }
+      }
+    }
+
     // Clone stats object to avoid mutating internal cached references
-    const responseData = { ...stats };
+    const responseData = { ...stats, memberEarnings };
     if (!isAdmin) {
       delete responseData.income;
       delete responseData.expenses;
@@ -217,7 +311,7 @@ export const getRecentOrders = async (req, res) => {
     const limit = parseInt(req.query.limit) || 6;
 
     const orders = await orderCollection
-      .find()
+      .find({ isStandaloneProject: { $ne: true } })
       .sort({ createdAt: -1 })
       .limit(limit)
       .toArray();
@@ -519,8 +613,8 @@ export const getRecentProjects = async (req, res) => {
             planName: {
               $cond: {
                 if: { $eq: ["$service", "custom"] },
-                then: "Custom Plan",
-                else: { $ifNull: ["$matchedPlan.planName", null] },
+                then: { $ifNull: ["$planName", "Custom Plan"] },
+                else: { $ifNull: ["$matchedPlan.planName", { $ifNull: ["$planName", null] }] },
               },
             },
             serviceName: {
@@ -563,6 +657,7 @@ export const getRecentProjects = async (req, res) => {
                 { $ifNull: ["$matchedMember.memberName", null] },
               ],
             },
+            assignedMembers: { $ifNull: ["$assignedMembers", []] },
             status: { $ifNull: ["$status", "Pending"] },
             payment: 1,
             tasks: 1,

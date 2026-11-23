@@ -6,6 +6,7 @@ import {
   uploadAttachments,
   deleteConversation,
   toggleBlockConversation,
+  toggleFollowUpConversation,
   getCustomerCRMDetails,
   confirmOrderFromChat,
   addInternalNote,
@@ -48,6 +49,12 @@ messageRouter.post(
   verifyId,
   verifyAdminOrMember,
   toggleBlockConversation
+);
+messageRouter.post(
+  "/toggleFollowUp",
+  verifyId,
+  verifyAdminOrMember,
+  toggleFollowUpConversation
 );
 
 // CRM & Notes Routes

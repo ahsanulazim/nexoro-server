@@ -747,6 +747,10 @@ export const getSidebarConversations = async (req, res) => {
       }
     }
 
+    if (req.query.isFollowUp === "true") {
+      andConditions.push({ isFollowUp: true });
+    }
+
     if (search && search.trim()) {
       const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const regex = new RegExp(escaped, "i");
@@ -1148,6 +1152,106 @@ export const toggleBlockConversation = async (req, res) => {
 };
 
 /**
+ * 4c. Toggle or Update Follow-Up Status for Conversation
+ */
+export const toggleFollowUpConversation = async (req, res) => {
+  try {
+    const { roomId, isFollowUp, reason, dueDate, priority } = req.body;
+    const decodedToken = req.user;
+
+    if (!roomId) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Room ID is required" });
+    }
+
+    const cleanId = String(roomId).replace(/^(fb_|ig_|wa_|room_)/, "");
+    const conv = await conversationCollection.findOne({
+      roomId: {
+        $in: [
+          roomId,
+          cleanId,
+          `fb_${cleanId}`,
+          `ig_${cleanId}`,
+          `wa_${cleanId}`,
+          `room_${cleanId}`,
+        ],
+      },
+    });
+
+    if (!conv) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Conversation not found" });
+    }
+
+    const targetRoomId = conv.roomId || roomId;
+    const newFollowUpState =
+      typeof isFollowUp === "boolean" ? isFollowUp : !Boolean(conv.isFollowUp);
+
+    const staffUser = await userCollection.findOne({
+      email: decodedToken?.email,
+    });
+    const staffName =
+      staffUser?.name || staffUser?.userName || decodedToken?.email || "Staff";
+
+    const followUpPayload = {
+      isFollowUp: newFollowUpState,
+      followUpAt: newFollowUpState ? new Date() : null,
+      followUpReason: newFollowUpState
+        ? (reason !== undefined && reason !== null ? String(reason).trim() : conv.followUpReason || "Important follow-up")
+        : null,
+      followUpDueDate:
+        newFollowUpState && dueDate
+          ? new Date(dueDate)
+          : (newFollowUpState ? conv.followUpDueDate || null : null),
+      followUpPriority:
+        newFollowUpState ? (priority || conv.followUpPriority || "medium") : null,
+      followUpBy: newFollowUpState
+        ? {
+            uid: decodedToken?.uid || null,
+            email: decodedToken?.email || null,
+            name: staffName,
+          }
+        : null,
+      updatedAt: new Date(),
+    };
+
+    // 1. Update Conversation in Database
+    await conversationCollection.updateOne(
+      { _id: conv._id },
+      {
+        $set: followUpPayload,
+      }
+    );
+
+    // 2. Real-time Socket Updates
+    const updateEventData = {
+      roomId: targetRoomId,
+      ...followUpPayload,
+    };
+
+    io.to(targetRoomId).emit("conversationFollowUpUpdated", updateEventData);
+    io.to("admin_global_room").emit("conversationFollowUpUpdated", updateEventData);
+    io.to("admin_global_room").emit("newConversationUpdate", updateEventData);
+
+    return res.status(200).json({
+      success: true,
+      isFollowUp: newFollowUpState,
+      message: newFollowUpState
+        ? "Conversation marked for follow-up"
+        : "Follow-up mark removed",
+      data: updateEventData,
+    });
+  } catch (error) {
+    console.error("Error in toggleFollowUpConversation:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Internal server error" });
+  }
+};
+
+/**
  * 5. Fetch Customer CRM Details for Right Side Panel (with Smart Chat Extraction & Client Matching)
  */
 export const getCustomerCRMDetails = async (req, res) => {
@@ -1345,6 +1449,19 @@ export const getCustomerCRMDetails = async (req, res) => {
         0
       );
 
+    const totalDue = orders
+      .filter((o) => o.status !== "Cancelled" && o.payment !== "Success")
+      .reduce((sum, ord) => {
+        if (ord.dueAmount !== undefined && ord.dueAmount !== null) {
+          return sum + Math.max(0, Number(ord.dueAmount) || 0);
+        }
+        const effectivePrice = Number(ord.price ?? ord.servicePrice ?? ord.amount ?? 0) || 0;
+        const discountVal = Number(ord.discount) || 0;
+        const amountVal = Number(ord.amount) || 0;
+        const due = effectivePrice - discountVal - amountVal;
+        return sum + (due > 0 ? due : 0);
+      }, 0);
+
     const extractedInfo = {
       name:
         customerData.name ||
@@ -1416,26 +1533,45 @@ export const getCustomerCRMDetails = async (req, res) => {
         blockedAt: conversation.blockedAt || null,
         blockedBy: conversation.blockedBy || null,
         blockReason: conversation.blockReason || null,
+        isFollowUp: Boolean(conversation.isFollowUp),
+        followUpAt: conversation.followUpAt || null,
+        followUpReason: conversation.followUpReason || null,
+        followUpDueDate: conversation.followUpDueDate || null,
+        followUpPriority: conversation.followUpPriority || "medium",
+        followUpBy: conversation.followUpBy || null,
         notes: conversation.internalNotes || [],
         ordersCount: orders.length,
         totalSpent,
-        recentOrders: orders.slice(0, 6).map((o) => ({
-          _id: o._id,
-          orderId: o.orderId || o._id,
-          serviceTitle:
-            o.service === "custom"
-              ? o.serviceName || "Custom Service"
-              : o.serviceTitle ||
-                serviceTitleMap.get(o.service) ||
-                o.serviceName ||
-                o.service ||
-                "Service",
-          price: o.price || o.servicePrice || 0,
-          amount: o.amount ?? o.servicePrice ?? o.price ?? 0,
-          payment: o.payment || "Pending",
-          status: o.status || "Pending",
-          createdAt: o.createdAt,
-        })),
+        totalDue,
+        recentOrders: orders.slice(0, 6).map((o) => {
+          const effectivePrice = Number(o.price ?? o.servicePrice ?? o.amount ?? 0) || 0;
+          const discountVal = Number(o.discount) || 0;
+          const amountVal = Number(o.amount) || 0;
+          const computedDue = effectivePrice - discountVal - amountVal;
+          const dueAmount =
+            o.dueAmount !== undefined && o.dueAmount !== null
+              ? (o.payment === "Success" ? 0 : Math.max(0, Number(o.dueAmount) || 0))
+              : (computedDue > 0 && o.payment !== "Success" ? computedDue : 0);
+
+          return {
+            _id: o._id,
+            orderId: o.orderId || o._id,
+            serviceTitle:
+              o.service === "custom"
+                ? o.serviceName || "Custom Service"
+                : o.serviceTitle ||
+                  serviceTitleMap.get(o.service) ||
+                  o.serviceName ||
+                  o.service ||
+                  "Service",
+            price: o.price || o.servicePrice || 0,
+            amount: o.amount ?? o.servicePrice ?? o.price ?? 0,
+            dueAmount,
+            payment: o.payment || "Pending",
+            status: o.status || "Pending",
+            createdAt: o.createdAt,
+          };
+        }),
         createdAt: conversation.createdAt,
         updatedAt: conversation.updatedAt,
       },

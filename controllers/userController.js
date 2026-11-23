@@ -535,13 +535,14 @@ export const getMemberProfileStats = async (req, res) => {
 
       const tasksList = Array.isArray(order.tasks) ? order.tasks : [];
       totalTasks += tasksList.length;
-      completedTasks += tasksList.filter((t) => t.completed).length;
+      const doneCount = tasksList.filter((t) => t.isCompleted || t.completed).length;
+      completedTasks += doneCount;
 
       // Resolved client name
       const clientName =
         order.client ||
         (order.clientId ? clientMap.get(order.clientId.toString()) : null) ||
-        "Client";
+        "—";
 
       return {
         _id: order._id,
@@ -559,7 +560,7 @@ export const getMemberProfileStats = async (req, res) => {
         createdAt: order.createdAt || null,
         updatedAt: order.updatedAt || null,
         tasksCount: tasksList.length,
-        completedTasksCount: tasksList.filter((t) => t.completed).length,
+        completedTasksCount: doneCount,
       };
     });
 
