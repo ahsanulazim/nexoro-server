@@ -2,21 +2,35 @@ import { ObjectId } from "mongodb";
 import client from "../config/db.js";
 
 const msgCollection = client.db("nexoro").collection("Messages");
+const queryCollection = client.db("nexoro").collection("ContactQueries");
 
 //create new Massage
 export const createMessage = async (req, res) => {
     const { name, company, phone, email, message } = req.body;
     const added = new Date();
     try {
-        await msgCollection.insertOne({
-            name,
-            company,
-            phone,
-            email,
+        const queryDoc = {
+            name: name ? name.trim() : "",
+            company: company ? company.trim() : "",
+            phone: phone ? phone.trim() : "",
+            email: email ? email.trim().toLowerCase() : "",
             read: false,
-            message,
+            message: message ? message.trim() : "",
+            status: "unread",
+            isStarred: false,
+            notes: [],
+            source: "website_contact_form",
+            createdAt: added,
+            updatedAt: added,
+        };
+        const queryResult = await queryCollection.insertOne(queryDoc);
+
+        await msgCollection.insertOne({
+            ...queryDoc,
+            _id: queryResult.insertedId,
             added,
-        });
+        }).catch(() => {});
+
         res.status(200).send({ success: true });
     } catch (error) {
         console.error("Create message error:", error);

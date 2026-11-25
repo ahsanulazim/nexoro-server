@@ -321,7 +321,11 @@ export const revenueChart = async (req, res) => {
         {
           $project: {
             createdAt: 1,
+            price: 1,
+            servicePrice: 1,
+            amount: 1,
             costs: { $ifNull: ["$costs", []] },
+            assignedMembers: { $ifNull: ["$assignedMembers", []] },
             totalCost: {
               $convert: {
                 input: "$totalCost",
@@ -400,6 +404,126 @@ export const revenueChart = async (req, res) => {
                 },
               },
             ],
+            fromAssignedMembers: [
+              { $unwind: "$assignedMembers" },
+              {
+                $project: {
+                  amount: {
+                    $cond: [
+                      {
+                        $and: [
+                          { $ne: ["$assignedMembers.amount", null] },
+                          {
+                            $gt: [
+                              {
+                                $convert: {
+                                  input: "$assignedMembers.amount",
+                                  to: "double",
+                                  onError: 0,
+                                  onNull: 0,
+                                },
+                              },
+                              0,
+                            ],
+                          },
+                        ],
+                      },
+                      {
+                        $convert: {
+                          input: "$assignedMembers.amount",
+                          to: "double",
+                          onError: 0,
+                          onNull: 0,
+                        },
+                      },
+                      {
+                        $cond: [
+                          { $eq: ["$assignedMembers.rateType", "percentage"] },
+                          {
+                            $round: [
+                              {
+                                $multiply: [
+                                  {
+                                    $convert: {
+                                      input: {
+                                        $ifNull: [
+                                          "$price",
+                                          { $ifNull: ["$servicePrice", "$amount"] },
+                                        ],
+                                      },
+                                      to: "double",
+                                      onError: 0,
+                                      onNull: 0,
+                                    },
+                                  },
+                                  {
+                                    $divide: [
+                                      {
+                                        $convert: {
+                                          input: {
+                                            $ifNull: [
+                                              "$assignedMembers.rateValue",
+                                              0,
+                                            ],
+                                          },
+                                          to: "double",
+                                          onError: 0,
+                                          onNull: 0,
+                                        },
+                                      },
+                                      100,
+                                    ],
+                                  },
+                                ],
+                              },
+                              0,
+                            ],
+                          },
+                          {
+                            $convert: {
+                              input: {
+                                $ifNull: ["$assignedMembers.rateValue", 0],
+                              },
+                              to: "double",
+                              onError: 0,
+                              onNull: 0,
+                            },
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                  date: {
+                    $convert: {
+                      input: {
+                        $ifNull: ["$assignedMembers.assignedAt", "$createdAt"],
+                      },
+                      to: "date",
+                      onError: "$createdAt",
+                      onNull: "$createdAt",
+                    },
+                  },
+                },
+              },
+              {
+                $match: {
+                  amount: { $gt: 0 },
+                  date: { $gte: startDate, $lte: endDate },
+                },
+              },
+              {
+                $group: {
+                  _id: {
+                    $dateToString: {
+                      format: mongoFormat,
+                      date: "$date",
+                      timezone: "+06:00",
+                    },
+                  },
+                  total: { $sum: "$amount" },
+                },
+              },
+            ],
           },
         },
       ])
@@ -408,6 +532,7 @@ export const revenueChart = async (req, res) => {
     const orderCostsFacet = orderCostsResult[0] || {};
     const costsFromArray = orderCostsFacet.fromCostsArray || [];
     const costsFromTotal = orderCostsFacet.fromTotalCostOnly || [];
+    const costsFromMembers = orderCostsFacet.fromAssignedMembers || [];
 
     // Helper to find data for a bucket (including grouping nearby hours for single-day)
     const findMatchingSum = (arr, bucket) => {
@@ -488,6 +613,18 @@ export const revenueChart = async (req, res) => {
             expenses += Number(item.total) || 0;
           }
         });
+
+        costsFromMembers.forEach((item) => {
+          const parts = (item._id || "").split("-");
+          const h = parseInt(parts[parts.length - 1], 10);
+          if (
+            item._id?.startsWith(bucket.datePrefix) &&
+            h >= bucket.hour &&
+            h < bucket.hour + 3
+          ) {
+            expenses += Number(item.total) || 0;
+          }
+        });
       } else {
         const orderMatch = chartData.find((item) => item._id === bucket.key);
         orders = orderMatch ? Number(orderMatch.orders) || 0 : 0;
@@ -497,11 +634,13 @@ export const revenueChart = async (req, res) => {
         const seMatch = standaloneExpenses.find((item) => item._id === bucket.key);
         const oc1Match = costsFromArray.find((item) => item._id === bucket.key);
         const oc2Match = costsFromTotal.find((item) => item._id === bucket.key);
+        const oc3Match = costsFromMembers.find((item) => item._id === bucket.key);
 
         expenses = Math.round(
           (Number(seMatch?.total) || 0) +
             (Number(oc1Match?.total) || 0) +
-            (Number(oc2Match?.total) || 0)
+            (Number(oc2Match?.total) || 0) +
+            (Number(oc3Match?.total) || 0)
         );
       }
 

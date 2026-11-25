@@ -1879,6 +1879,7 @@ export const confirmOrderFromChat = async (req, res) => {
       createdById,
       assignedTo: initialAssignedTo,
       rewardPoints: parsedRewardPoints,
+      orderNote: (orderNote || "").trim(),
       tasks: [],
       amount: amountNum,
       payment,

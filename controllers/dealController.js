@@ -668,6 +668,7 @@ export const confirmDealEPS = async (req, res) => {
       createdById: null,
       assignedTo: deal.assignedTo || null,
       rewardPoints: deal.rewardPoints || 5,
+      orderNote: deal.orderNote || "",
       tasks: [],
       amount: deal.amount,
       payment: "Success",

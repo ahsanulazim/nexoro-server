@@ -124,9 +124,14 @@ export const getDashboardStats = async (req, res) => {
     if (token) {
       try {
         const decodedToken = await admin.auth().verifyIdToken(token);
-        if (decodedToken?.email) {
+        if (decodedToken?.email || decodedToken?.uid) {
           callerUser = await userCollection.findOne({
-            email: { $regex: new RegExp(`^${decodedToken.email.trim()}$`, "i") },
+            $or: [
+              ...(decodedToken.email
+                ? [{ email: { $regex: new RegExp(`^${decodedToken.email.trim()}$`, "i") } }]
+                : []),
+              ...(decodedToken.uid ? [{ uid: decodedToken.uid }] : []),
+            ],
           });
         }
         if (callerUser?.role === "admin") {
@@ -140,59 +145,111 @@ export const getDashboardStats = async (req, res) => {
     // Compute member earnings & stats if caller is authenticated
     if (callerUser) {
       const callerId = callerUser._id.toString();
-      const callerEmail = (callerUser.email || "").toLowerCase();
-      const callerName = (callerUser.name || callerUser.displayName || "").toLowerCase();
+      const callerObjectId = ObjectId.isValid(callerId) ? new ObjectId(callerId) : null;
+      const callerEmail = (callerUser.email || "").toLowerCase().trim();
+      const callerName = (callerUser.name || callerUser.displayName || "").toLowerCase().trim();
 
       // Also check team collection for linked member ID
       const teamMember = await teamCollection.findOne({
         $or: [
-          { email: { $regex: new RegExp(`^${callerEmail}$`, "i") } },
+          ...(callerEmail ? [{ email: { $regex: new RegExp(`^${callerEmail}$`, "i") } }] : []),
           ...(callerName ? [{ memberName: { $regex: new RegExp(`^${callerName}$`, "i") } }] : []),
         ],
       });
       const teamMemberId = teamMember?._id?.toString() || "";
+      const teamMemberObjectId =
+        teamMemberId && ObjectId.isValid(teamMemberId) ? new ObjectId(teamMemberId) : null;
+
+      const idMatches = [
+        callerId,
+        ...(callerObjectId ? [callerObjectId] : []),
+        ...(teamMemberId ? [teamMemberId] : []),
+        ...(teamMemberObjectId ? [teamMemberObjectId] : []),
+      ];
+
+      const emailRegex = callerEmail
+        ? new RegExp(`^${callerEmail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i")
+        : null;
+      const nameRegex = callerName
+        ? new RegExp(`^${callerName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i")
+        : null;
+
+      const matchConditions = [
+        { "assignedMembers.memberId": { $in: idMatches } },
+        { assignedTo: { $in: idMatches } },
+      ];
+      if (emailRegex) {
+        matchConditions.push(
+          { "assignedMembers.memberEmail": { $regex: emailRegex } },
+          { assignedTo: { $regex: emailRegex } },
+          { assignedMemberEmail: { $regex: emailRegex } }
+        );
+      }
+      if (nameRegex) {
+        matchConditions.push(
+          { "assignedMembers.memberName": { $regex: nameRegex } },
+          { assignedMember: { $regex: nameRegex } },
+          { assignedTo: { $regex: nameRegex } }
+        );
+      }
 
       const memberOrders = await orderCollection
         .find({
           status: { $ne: "Cancelled" },
-          $or: [
-            { "assignedMembers.memberId": callerId },
-            { "assignedMembers.memberEmail": callerEmail },
-            { assignedTo: callerId },
-            { assignedTo: callerEmail },
-            { assignedMemberEmail: callerEmail },
-            ...(teamMemberId
-              ? [
-                  { "assignedMembers.memberId": teamMemberId },
-                  { assignedTo: teamMemberId },
-                ]
-              : []),
-          ],
+          $or: matchConditions,
         })
         .toArray();
 
       for (const order of memberOrders) {
         let orderMemberEarning = 0;
-        const orderPrice = Number(order.price) || Number(order.servicePrice) || 0;
+        const orderPrice =
+          Number(order.price) ||
+          Number(order.servicePrice) ||
+          Number(order.amount) ||
+          0;
 
         if (Array.isArray(order.assignedMembers) && order.assignedMembers.length > 0) {
-          const match = order.assignedMembers.find(
-            (m) =>
-              (m.memberId && (String(m.memberId) === callerId || String(m.memberId) === teamMemberId)) ||
-              (m.memberEmail && m.memberEmail.toLowerCase() === callerEmail) ||
-              (m.memberName && callerName && m.memberName.toLowerCase() === callerName),
-          );
+          const match = order.assignedMembers.find((m) => {
+            const mId = m.memberId ? String(m.memberId).trim() : "";
+            const mEmail = (m.memberEmail || "").toLowerCase().trim();
+            const mName = (m.memberName || "").toLowerCase().trim();
+
+            return (
+              (mId && (mId === callerId || mId === teamMemberId)) ||
+              (callerEmail && mEmail && mEmail === callerEmail) ||
+              (callerName && mName && mName === callerName)
+            );
+          });
+
           if (match) {
-            if (match.rateType === "percentage") {
-              orderMemberEarning = Math.round(orderPrice * ((Number(match.rateValue) || 0) / 100));
+            if (
+              match.amount !== undefined &&
+              match.amount !== null &&
+              !isNaN(Number(match.amount)) &&
+              Number(match.amount) > 0
+            ) {
+              orderMemberEarning = Number(match.amount);
+            } else if (match.rateType === "percentage") {
+              orderMemberEarning = Math.round(
+                orderPrice * ((Number(match.rateValue) || 0) / 100)
+              );
             } else {
-              orderMemberEarning = Number(match.rateValue) || Number(match.amount) || 0;
+              orderMemberEarning = Number(match.rateValue) || 0;
             }
           }
         } else {
           // Legacy assignment fallback
-          if (order.rateType === "percentage") {
-            orderMemberEarning = Math.round(orderPrice * ((Number(order.rateValue) || 0) / 100));
+          if (
+            order.assignedCost !== undefined &&
+            order.assignedCost !== null &&
+            !isNaN(Number(order.assignedCost)) &&
+            Number(order.assignedCost) > 0
+          ) {
+            orderMemberEarning = Number(order.assignedCost);
+          } else if (order.rateType === "percentage") {
+            orderMemberEarning = Math.round(
+              orderPrice * ((Number(order.rateValue) || 0) / 100)
+            );
           } else if (order.rateType === "flat") {
             orderMemberEarning = Number(order.rateValue) || 0;
           }

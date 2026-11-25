@@ -13,6 +13,8 @@ const countriesCollection = client.db("nexoro").collection("Countries");
 const clientCollection = client.db("nexoro").collection("Clients");
 const teamCollection = client.db("nexoro").collection("Team");
 const userCollection = client.db("nexoro").collection("Users");
+const dealCollection = client.db("nexoro").collection("Deals");
+const conversationCollection = client.db("nexoro").collection("Conversations");
 
 // Helper: Generate unique orderId using counters collection
 export const getNextOrderId = async () => {
@@ -147,6 +149,7 @@ export const createOrder = async (req, res) => {
       createdById,
       assignedTo: initialAssignedTo,
       rewardPoints: parsedRewardPoints,
+      orderNote: (req.body.orderNote || "").trim(),
       tasks: [],
       amount: amountNum,
       payment,
@@ -562,10 +565,53 @@ export const getOrder = async (req, res) => {
       }
     }
 
+    // Fetch deal note if order doesn't have orderNote directly
+    let orderNote = order.orderNote || "";
+    if (!orderNote && order.dealId) {
+      const dealDoc = await dealCollection.findOne({ dealId: order.dealId });
+      if (dealDoc?.orderNote) {
+        orderNote = dealDoc.orderNote;
+      }
+    }
+
+    // Fetch conversation internal notes linked to this order or client
+    let conversationNotes = [];
+    const convQuery = order.roomId
+      ? { roomId: order.roomId }
+      : order.clientId
+      ? { clientId: order.clientId }
+      : null;
+
+    if (convQuery) {
+      const conv = await conversationCollection.findOne(convQuery, {
+        projection: { internalNotes: 1 },
+      });
+      if (Array.isArray(conv?.internalNotes)) {
+        conversationNotes = conv.internalNotes;
+      }
+    }
+
+    // Merge notes on order if order itself has internalNotes array
+    const combinedNotes = [
+      ...(Array.isArray(order.internalNotes) ? order.internalNotes : []),
+      ...conversationNotes,
+    ];
+
+    // Deduplicate notes by _id if any overlaps exist
+    const uniqueNotesMap = new Map();
+    combinedNotes.forEach((n) => {
+      if (n?._id) uniqueNotesMap.set(String(n._id), n);
+    });
+    const finalNotes = Array.from(uniqueNotesMap.values()).sort(
+      (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+    );
+
     res.status(200).json({
       success: true,
       order: {
         ...order,
+        orderNote: orderNote || null,
+        internalNotes: finalNotes,
         rewardPoints: order.rewardPoints ?? 5,
         costs: order.costs || [],
         totalCost:
@@ -1830,6 +1876,131 @@ export const getMyOrders = async (req, res) => {
   } catch (error) {
     console.error("Get my orders error:", error);
     return res.status(500).json({ success: false, message: "Failed to fetch customer orders" });
+  }
+};
+
+// Add internal note to order
+export const addOrderNote = async (req, res) => {
+  const { orderId, text } = req.body;
+  const authorUser = req.user;
+
+  try {
+    if (!orderId || !text || text.trim() === "") {
+      return res
+        .status(400)
+        .json({ success: false, message: "Order ID and note text are required" });
+    }
+
+    const orderQuery = ObjectId.isValid(orderId)
+      ? { $or: [{ _id: new ObjectId(orderId) }, { orderId }] }
+      : { orderId };
+
+    const order = await orderCollection.findOne(orderQuery);
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    let authorName = authorUser?.name || authorUser?.displayName || authorUser?.email || "Staff";
+    let authorRole = "member";
+    if (authorUser?.email) {
+      const dbUser = await userCollection.findOne({ email: authorUser.email });
+      if (dbUser) {
+        authorName = dbUser.name || dbUser.displayName || authorName;
+        authorRole = dbUser.role || authorRole;
+      }
+    }
+
+    const newNote = {
+      _id: new Date().getTime().toString(),
+      text: text.trim(),
+      author: authorName,
+      authorEmail: authorUser?.email || "",
+      authorRole,
+      createdAt: new Date(),
+    };
+
+    // Save directly to the order
+    await orderCollection.updateOne(
+      { _id: order._id },
+      { $push: { internalNotes: newNote } }
+    );
+
+    // Sync to conversation collection if linked to a room or client
+    const convQuery = order.roomId
+      ? { roomId: order.roomId }
+      : order.clientId
+      ? { clientId: order.clientId }
+      : null;
+
+    if (convQuery) {
+      await conversationCollection.updateOne(convQuery, {
+        $push: {
+          internalNotes: {
+            ...newNote,
+            text: `[Order #${order.orderId || orderId}]: ${newNote.text}`,
+          },
+        },
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Internal note added successfully",
+      note: newNote,
+    });
+  } catch (error) {
+    console.error("Add order note error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to add internal note" });
+  }
+};
+
+// Delete internal note from order
+export const deleteOrderNote = async (req, res) => {
+  const { orderId, noteId } = req.body;
+
+  try {
+    if (!orderId || !noteId) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Order ID and note ID are required" });
+    }
+
+    const orderQuery = ObjectId.isValid(orderId)
+      ? { $or: [{ _id: new ObjectId(orderId) }, { orderId }] }
+      : { orderId };
+
+    const order = await orderCollection.findOne(orderQuery);
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    await orderCollection.updateOne(
+      { _id: order._id },
+      { $pull: { internalNotes: { _id: noteId } } }
+    );
+
+    const convQuery = order.roomId
+      ? { roomId: order.roomId }
+      : order.clientId
+      ? { clientId: order.clientId }
+      : null;
+
+    if (convQuery) {
+      await conversationCollection.updateOne(convQuery, {
+        $pull: { internalNotes: { _id: noteId } },
+      });
+    }
+
+    return res
+      .status(200)
+      .json({ success: true, message: "Note deleted successfully" });
+  } catch (error) {
+    console.error("Delete order note error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to delete internal note" });
   }
 };
 

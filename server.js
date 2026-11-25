@@ -27,6 +27,7 @@ import projectRouter from "./routes/projectRouter.js";
 import expenseRouter from "./routes/expenseRouter.js";
 import whatsappRouter from "./routes/whatsappRouter.js";
 import pointsRouter from "./routes/pointsRouter.js";
+import queryRouter from "./routes/queryRouter.js";
 
 dotenv.config();
 
@@ -68,6 +69,7 @@ app.use("/projects", projectRouter);
 app.use("/expenses", expenseRouter);
 app.use("/whatsapp", whatsappRouter);
 app.use("/points", pointsRouter);
+app.use("/queries", queryRouter);
 
 app.get("/", (req, res) => res.send("Hello World!"));
 

@@ -126,7 +126,11 @@ const getOrderCosts = async (startDate, endDate) => {
     {
       $project: {
         createdAt: 1,
+        price: 1,
+        servicePrice: 1,
+        amount: 1,
         costs: { $ifNull: ["$costs", []] },
+        assignedMembers: { $ifNull: ["$assignedMembers", []] },
         totalCost: {
           $convert: {
             input: "$totalCost",
@@ -203,6 +207,122 @@ const getOrderCosts = async (startDate, endDate) => {
             },
           },
         ],
+        // Member payouts/fees from assignedMembers array
+        fromAssignedMembers: [
+          { $unwind: "$assignedMembers" },
+          {
+            $project: {
+              amount: {
+                $cond: [
+                  {
+                    $and: [
+                      { $ne: ["$assignedMembers.amount", null] },
+                      {
+                        $gt: [
+                          {
+                            $convert: {
+                              input: "$assignedMembers.amount",
+                              to: "double",
+                              onError: 0,
+                              onNull: 0,
+                            },
+                          },
+                          0,
+                        ],
+                      },
+                    ],
+                  },
+                  {
+                    $convert: {
+                      input: "$assignedMembers.amount",
+                      to: "double",
+                      onError: 0,
+                      onNull: 0,
+                    },
+                  },
+                  {
+                    $cond: [
+                      { $eq: ["$assignedMembers.rateType", "percentage"] },
+                      {
+                        $round: [
+                          {
+                            $multiply: [
+                              {
+                                $convert: {
+                                  input: {
+                                    $ifNull: [
+                                      "$price",
+                                      { $ifNull: ["$servicePrice", "$amount"] },
+                                    ],
+                                  },
+                                  to: "double",
+                                  onError: 0,
+                                  onNull: 0,
+                                },
+                              },
+                              {
+                                $divide: [
+                                  {
+                                    $convert: {
+                                      input: {
+                                        $ifNull: [
+                                          "$assignedMembers.rateValue",
+                                          0,
+                                        ],
+                                      },
+                                      to: "double",
+                                      onError: 0,
+                                      onNull: 0,
+                                    },
+                                  },
+                                  100,
+                                ],
+                              },
+                            ],
+                          },
+                          0,
+                        ],
+                      },
+                      {
+                        $convert: {
+                          input: {
+                            $ifNull: ["$assignedMembers.rateValue", 0],
+                          },
+                          to: "double",
+                          onError: 0,
+                          onNull: 0,
+                        },
+                      },
+                    ],
+                  },
+                ],
+              },
+              date: {
+                $convert: {
+                  input: {
+                    $ifNull: ["$assignedMembers.assignedAt", "$createdAt"],
+                  },
+                  to: "date",
+                  onError: "$createdAt",
+                  onNull: "$createdAt",
+                },
+              },
+            },
+          },
+          { $match: { amount: { $gt: 0 } } },
+          ...(startDate && endDate
+            ? [{ $match: { date: { $gte: startDate, $lte: endDate } } }]
+            : endDate
+            ? [{ $match: { date: { $lt: endDate } } }]
+            : []),
+          {
+            $group: {
+              _id: null,
+              total: { $sum: "$amount" },
+              count: { $sum: 1 },
+            },
+          },
+        ],
       },
     },
   ];
@@ -211,12 +331,14 @@ const getOrderCosts = async (startDate, endDate) => {
   const facet = result[0] || {};
   const fromArray = facet.fromCostsArray?.[0]?.total || 0;
   const fromTotalCost = facet.fromTotalCostOnly?.[0]?.total || 0;
+  const fromMembers = facet.fromAssignedMembers?.[0]?.total || 0;
   const count =
     (facet.fromCostsArray?.[0]?.count || 0) +
-    (facet.fromTotalCostOnly?.[0]?.count || 0);
+    (facet.fromTotalCostOnly?.[0]?.count || 0) +
+    (facet.fromAssignedMembers?.[0]?.count || 0);
 
   return {
-    total: fromArray + fromTotalCost,
+    total: fromArray + fromTotalCost + fromMembers,
     count,
   };
 };
@@ -366,6 +488,7 @@ const getPeriodBreakdown = async (startDate, endDate) => {
         $or: [
           { "costs.0": { $exists: true } },
           { totalCost: { $gt: 0 } },
+          { "assignedMembers.0": { $exists: true } },
         ],
       })
       .limit(100)
@@ -405,7 +528,7 @@ const getPeriodBreakdown = async (startDate, endDate) => {
     })
   );
 
-  // Extract order project costs that fall in the date range
+  // Extract order project costs and member fees that fall in the date range
   const matchedOrderCosts = [];
   ordersWithCosts.forEach((order) => {
     if (Array.isArray(order.costs) && order.costs.length > 0) {
@@ -418,6 +541,7 @@ const getPeriodBreakdown = async (startDate, endDate) => {
             title: cost.name || cost.title || "Project Cost",
             amount: Number(cost.amount) || 0,
             date: costDate,
+            type: "Order Cost",
           });
         }
       });
@@ -428,6 +552,51 @@ const getPeriodBreakdown = async (startDate, endDate) => {
         title: "Order Cost",
         amount: Number(order.totalCost) || 0,
         date: order.createdAt,
+        type: "Order Cost",
+      });
+    }
+
+    // Member fees / payouts from assignedMembers
+    if (Array.isArray(order.assignedMembers) && order.assignedMembers.length > 0) {
+      const orderPrice =
+        Number(order.price) ||
+        Number(order.servicePrice) ||
+        Number(order.amount) ||
+        0;
+
+      order.assignedMembers.forEach((member) => {
+        const memberDate = member.assignedAt
+          ? new Date(member.assignedAt)
+          : order.createdAt;
+        if (memberDate >= startDate && memberDate <= endDate) {
+          let memberAmount = 0;
+          if (
+            member.amount !== undefined &&
+            member.amount !== null &&
+            !isNaN(Number(member.amount)) &&
+            Number(member.amount) > 0
+          ) {
+            memberAmount = Number(member.amount);
+          } else if (member.rateType === "percentage") {
+            memberAmount = Math.round(
+              orderPrice * ((Number(member.rateValue) || 0) / 100)
+            );
+          } else {
+            memberAmount = Number(member.rateValue) || 0;
+          }
+
+          if (memberAmount > 0) {
+            matchedOrderCosts.push({
+              orderId: order.orderId,
+              serviceName: order.serviceName || order.service,
+              title: `Member Fee (${member.memberName || "Member"})`,
+              amount: memberAmount,
+              date: memberDate,
+              paidTo: member.memberName || "Team Member",
+              type: "Member Fee",
+            });
+          }
+        }
       });
     }
   });
@@ -622,6 +791,7 @@ export const getPaginatedPeriodBreakdown = async ({
                 $or: [
                   { "costs.0": { $exists: true } },
                   { totalCost: { $gt: 0 } },
+                  { "assignedMembers.0": { $exists: true } },
                 ],
               },
             },
@@ -629,8 +799,12 @@ export const getPaginatedPeriodBreakdown = async ({
               $project: {
                 orderId: 1,
                 serviceName: { $ifNull: ["$serviceName", "$service"] },
+                price: 1,
+                servicePrice: 1,
+                amount: 1,
                 createdAt: 1,
                 costs: { $ifNull: ["$costs", []] },
+                assignedMembers: { $ifNull: ["$assignedMembers", []] },
                 totalCost: {
                   $convert: {
                     input: "$totalCost",
@@ -730,11 +904,163 @@ export const getPaginatedPeriodBreakdown = async ({
                     },
                   },
                 ],
+                fromAssignedMembers: [
+                  { $unwind: "$assignedMembers" },
+                  {
+                    $project: {
+                      _id: {
+                        $concat: [
+                          { $ifNull: ["$orderId", ""] },
+                          "-Fee-",
+                          { $ifNull: ["$assignedMembers.memberName", "Member"] },
+                        ],
+                      },
+                      title: {
+                        $concat: [
+                          { $ifNull: ["$serviceName", "Service"] },
+                          " - Fee (",
+                          { $ifNull: ["$assignedMembers.memberName", "Member"] },
+                          ")",
+                        ],
+                      },
+                      ref: { $ifNull: ["$orderId", "-"] },
+                      paidTo: {
+                        $ifNull: ["$assignedMembers.memberName", "Team Member"],
+                      },
+                      amount: {
+                        $cond: [
+                          {
+                            $and: [
+                              { $ne: ["$assignedMembers.amount", null] },
+                              {
+                                $gt: [
+                                  {
+                                    $convert: {
+                                      input: "$assignedMembers.amount",
+                                      to: "double",
+                                      onError: 0,
+                                      onNull: 0,
+                                    },
+                                  },
+                                  0,
+                                ],
+                              },
+                            ],
+                          },
+                          {
+                            $convert: {
+                              input: "$assignedMembers.amount",
+                              to: "double",
+                              onError: 0,
+                              onNull: 0,
+                            },
+                          },
+                          {
+                            $cond: [
+                              {
+                                $eq: [
+                                  "$assignedMembers.rateType",
+                                  "percentage",
+                                ],
+                              },
+                              {
+                                $round: [
+                                  {
+                                    $multiply: [
+                                      {
+                                        $convert: {
+                                          input: {
+                                            $ifNull: [
+                                              "$price",
+                                              {
+                                                $ifNull: [
+                                                  "$servicePrice",
+                                                  "$amount",
+                                                ],
+                                              },
+                                            ],
+                                          },
+                                          to: "double",
+                                          onError: 0,
+                                          onNull: 0,
+                                        },
+                                      },
+                                      {
+                                        $divide: [
+                                          {
+                                            $convert: {
+                                              input: {
+                                                $ifNull: [
+                                                  "$assignedMembers.rateValue",
+                                                  0,
+                                                ],
+                                              },
+                                              to: "double",
+                                              onError: 0,
+                                              onNull: 0,
+                                            },
+                                          },
+                                          100,
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  0,
+                                ],
+                              },
+                              {
+                                $convert: {
+                                  input: {
+                                    $ifNull: [
+                                      "$assignedMembers.rateValue",
+                                      0,
+                                    ],
+                                  },
+                                  to: "double",
+                                  onError: 0,
+                                  onNull: 0,
+                                },
+                              },
+                            ],
+                          },
+                        ],
+                      },
+                      paymentStatus: { $literal: "Allocated" },
+                      paymentMethod: { $literal: "Member Payout" },
+                      date: {
+                        $convert: {
+                          input: {
+                            $ifNull: [
+                              "$assignedMembers.assignedAt",
+                              "$createdAt",
+                            ],
+                          },
+                          to: "date",
+                          onError: "$createdAt",
+                          onNull: "$createdAt",
+                        },
+                      },
+                      type: { $literal: "Member Fee" },
+                    },
+                  },
+                  {
+                    $match: {
+                      amount: { $gt: 0 },
+                      date: { $gte: currentStart, $lte: currentEnd },
+                    },
+                  },
+                ],
               },
             },
             {
               $project: {
-                allCosts: { $concatArrays: ["$fromCosts", "$fromTotalCostOnly"] },
+                allCosts: {
+                  $concatArrays: [
+                    "$fromCosts",
+                    "$fromTotalCostOnly",
+                    "$fromAssignedMembers",
+                  ],
+                },
               },
             },
             { $unwind: "$allCosts" },

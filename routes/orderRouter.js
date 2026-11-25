@@ -11,6 +11,8 @@ import {
   updateOrderStatus,
   updateOrderTasks,
   updateOrderCosts,
+  addOrderNote,
+  deleteOrderNote,
 } from "../controllers/orderController.js";
 import { verifyAdmin } from "../middleware/verifyAdmin.js";
 import { verifyId } from "../middleware/verifyId.js";
@@ -29,6 +31,8 @@ router.put("/updateOrderStatus", verifyId, updateOrderStatus);
 router.put("/assignOrderToMember", verifyId, assignOrderToMember);
 router.put("/updateTasks", verifyId, updateOrderTasks);
 router.put("/updateCosts", verifyId, updateOrderCosts);
+router.post("/addNote", verifyId, addOrderNote);
+router.delete("/deleteNote", verifyId, deleteOrderNote);
 router.delete("/deleteOrder/:orderId", verifyAdmin, deleteOrder);
 
 export default router;
